@@ -72,7 +72,7 @@ class RelationshipAnnounceNotifier:
                 "as:object": f"https://hal.science/{document_id}",
                 "as:relationship": "https://w3id.org/codemeta/3.0#citation",
                 "as:subject": software_name,
-                "id": f"https://hal.science/{document_id}",
+                "id": uuid.uuid4().urn,
                 "type": "Relationship",
             },
             "origin": {
