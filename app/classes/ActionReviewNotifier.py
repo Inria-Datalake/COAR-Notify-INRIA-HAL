@@ -52,7 +52,7 @@ class ActionReviewNotifier:
                 "name": actor_name,
             },
             "origin": {
-                "id": actor_id,
+                "id": f"https://hal.science/{actor_id}",
                 "type": "Service",
                 "inbox": origin_inbox,
             },
