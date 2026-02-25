@@ -52,7 +52,7 @@ class ActionReviewNotifier:
                 "name": actor_name,
             },
             "origin": {
-                "id": f"https://hal.science/{actor_id}",
+                "id": actor_id,
                 "type": "Service",
                 "inbox": origin_inbox,
             },
@@ -62,7 +62,7 @@ class ActionReviewNotifier:
                 "inbox": target_inbox,
             },
             "object": {
-                "id": document_id,
+                "id": f"https://hal.science/{document_id}",
                 "ietf:cite-as": None,
                 "sorg:citation": {
                     "@context": "https://doi.org/10.5063/schema/codemeta-2.0",
