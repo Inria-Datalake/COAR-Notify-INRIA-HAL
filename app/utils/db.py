@@ -374,7 +374,10 @@ class DatabaseManager:
                         COLLECT softwareName = mention.software_name.normalizedForm INTO mentionsGroup
                         RETURN {
                             softwareName: softwareName,
-                            contexts: mentionsGroup[*].mention.context
+                            contexts: mentionsGroup[*].mention.context,
+                            created: LENGTH(mentionsGroup[* FILTER CURRENT.mention.mentionContextAttributes.created.value == true]) > 0,
+                            used:    LENGTH(mentionsGroup[* FILTER CURRENT.mention.mentionContextAttributes.used.value    == true]) > 0,
+                            shared:  LENGTH(mentionsGroup[* FILTER CURRENT.mention.mentionContextAttributes.shared.value  == true]) > 0
                         }
             """
 
