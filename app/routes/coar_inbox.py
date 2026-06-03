@@ -1,176 +1,138 @@
 import logging
+import re
 
-from flask import Blueprint, request, jsonify, render_template
+from flask import Blueprint, jsonify, render_template, request
 
-from app.utils.notification_handler import accept_notification, reject_notification, \
-    send_validation_to_viz
+from app.utils.db import get_db
+from app.utils.notification_handler import (
+    accept_notification,
+    reject_notification,
+    send_validation_to_viz,
+)
 
 logger = logging.getLogger(__name__)
 
 coar_inbox_bp = Blueprint("coar_inbox", __name__)
 
-received_notifications = []
+_SWH_ORIGIN = "https://www.softwareheritage.org"
+_OAI_HAL_PREFIX_RE = re.compile(r"^oai:hal:", re.IGNORECASE)
+
+
+def _origin_id(notification: dict) -> str:
+    origin = notification.get("origin") or {}
+    return (origin.get("id") or "").rstrip("/")
+
 
 @coar_inbox_bp.route("/inbox", methods=["POST"])
 def receive_notification():
     """
     COAR Notify inbox.
-    Receives a JSON-LD notification and validates it.
+    Receives a JSON-LD notification, persists it, and dispatches Accept/Reject.
     """
     notification = request.get_json(force=True)
-    notification_types = notification.get('type', [])
+    notification_types = notification.get("type", [])
     logger.info(f"Received COAR notification: {notification_types}")
 
-    # Store the notification for display
-    received_notifications.append(notification)
-
-    if type(notification_types) is list:
-        notification_type = notification_types[0]
+    if isinstance(notification_types, list):
+        notification_type = notification_types[0] if notification_types else None
     else:
         notification_type = notification_types
 
-    notification_origin = notification.get("origin", None)
-    if notification_origin and notification_origin["id"] == "https://www.softwareheritage.org/":
+    # Ignore notifications that originate from Software Heritage to avoid loops.
+    if _origin_id(notification) == _SWH_ORIGIN:
         logger.info("Notification originated from Software Heritage is ignored.")
         return jsonify({
-            "status": "ok",
-            "type": getattr(notification, "type", None),
-            "actor": notification_origin["id"]
+            "status": "ignored",
+            "reason": "Notification from Software Heritage",
+            "actor": _SWH_ORIGIN,
         }), 202
 
+    get_db().store_received_notification(notification)
+
     if notification_type in ("Accept", "Reject"):
-        hal_id_full = notification['object']['object']['id']
-        hal_id = hal_id_full.replace('oai:HAL:', '')
-        software_name = notification['object']['object']['sorg:citation']['name']
+        hal_id_full = notification["object"]["object"]["id"]
+        hal_id = _OAI_HAL_PREFIX_RE.sub("", hal_id_full)
+        software_name = notification["object"]["object"]["sorg:citation"]["name"]
+        accepted = notification_type == "Accept"
 
-        notification_accepted = notification_type == "Accept"
-
-        if notification_accepted:
+        if accepted:
             accept_notification(notification)
         else:
             reject_notification(notification)
 
-        send_validation_to_viz(hal_id, software_name, notification_accepted)
+        send_validation_to_viz(hal_id, software_name, accepted)
 
-    # Respond with the type and actor info
+    actor = notification.get("actor") or {}
     return jsonify({
         "status": "ok",
-        "type": getattr(notification, "type", None),
-        "actor": getattr(notification['actor'], "id", None)
+        "type": notification_type,
+        "actor": actor.get("id"),
     }), 202
+
 
 @coar_inbox_bp.route("/inbox", methods=["GET"])
 def inbox_description():
     """
     COAR Notify inbox description.
-    Returns information about how to send notifications to this inbox.
     """
     return jsonify({
         "title": "COAR Notify Inbox",
-        "description": "This inbox receives COAR-compliant notifications for software mention verification",
+        "description": "Receives COAR-compliant notifications for software mention verification",
         "version": "1.0",
         "endpoints": {
             "POST": {
                 "url": "/inbox",
                 "method": "POST",
                 "content_type": "application/json",
-                "description": "Send a COAR notification to verify or reject software mentions"
+                "description": "Send a COAR notification to verify or reject software mentions",
             },
             "GET": {
                 "url": "/inbox",
                 "method": "GET",
-                "description": "Get this API documentation"
-            }
+                "description": "Get this API documentation",
+            },
         },
         "supported_notification_types": [
             {
                 "type": "Accept",
                 "description": "Accepts a software mention as verified by the author",
-                "purpose": "Marks software as verified in the database"
             },
             {
                 "type": "Reject",
-                "description": "Rejects a software mention",
-                "purpose": "Marks software as not verified by the author"
-            }
+                "description": "Rejects a software mention as not verified by the author",
+            },
         ],
-        "request_format": {
-            "content_type": "application/ld+json",
-            "required_fields": [
-                "type",
-                "actor",
-                "object"
-            ],
-            "example_accept": {
-                "type": "Accept",
-                "actor": {
-                    "type": "Person",
-                    "id": "https://orcid.org/0000-0000-0000-0000"
-                },
-                "object": {
-                    "type": "Offer",
-                    "id": "urn:uuid:12345678-1234-1234-1234-123456789012",
-                    "object": {
-                        "type": "Document",
-                        "id": "oai:HAL:hal-01478788",
-                        "sorg:citation": {
-                            "name": "SoftwareName",
-                            "type": "Software"
-                        }
-                    }
-                }
+        "request_example": {
+            "type": "Accept",
+            "actor": {
+                "type": "Person",
+                "id": "https://orcid.org/0000-0000-0000-0000",
             },
-            "example_reject": {
-                "type": "Reject",
-                "actor": {
-                    "type": "Person",
-                    "id": "https://orcid.org/0000-0000-0000-0000"
-                },
+            "object": {
+                "type": "Offer",
+                "id": "urn:uuid:12345678-1234-1234-1234-123456789012",
                 "object": {
-                    "type": "Offer",
-                    "id": "urn:uuid:12345678-1234-1234-1234-123456789012",
-                    "object": {
-                        "type": "Document",
-                        "id": "oai:HAL:hal-01478788",
-                        "sorg:citation": {
-                            "name": "SoftwareName",
-                            "type": "Software"
-                        }
-                    }
-                }
-            }
-        },
-        "usage_examples": {
-            "curl_accept": "curl -X POST http://localhost:5000/inbox \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"type\": \"Accept\",\n    \"actor\": {\n      \"type\": \"Person\",\n      \"id\": \"https://orcid.org/0000-0000-0000-0000\"\n    },\n    \"object\": {\n      \"type\": \"Offer\",\n      \"id\": \"urn:uuid:12345678-1234-1234-1234-123456789012\",\n      \"object\": {\n        \"type\": \"Document\",\n        \"id\": \"oai:HAL:hal-01478788\",\n        \"sorg:citation\": {\n          \"name\": \"SoftwareName\",\n          \"type\": \"Software\"\n        }\n      }\n    }\n  }'",
-            "curl_reject": "curl -X POST http://localhost:5000/inbox \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"type\": \"Reject\",\n    \"actor\": {\n      \"type\": \"Person\",\n      \"id\": \"https://orcid.org/0000-0000-0000-0000\"\n    },\n    \"object\": {\n      \"type\": \"Offer\",\n      \"id\": \"urn:uuid:12345678-1234-1234-1234-123456789012\",\n      \"object\": {\n        \"type\": \"Document\",\n        \"id\": \"oai:HAL:hal-01478788\",\n        \"sorg:citation\": {\n          \"name\": \"SoftwareName\",\n          \"type\": \"Software\"\n        }\n      }\n    }\n  }'",
-            "python": "import requests\nimport json\n\n# Send Accept notification\naccept_payload = {\n    \"type\": \"Accept\",\n    \"actor\": {\n        \"type\": \"Person\",\n        \"id\": \"https://orcid.org/0000-0000-0000-0000\"\n    },\n    \"object\": {\n        \"type\": \"Offer\",\n        \"id\": \"urn:uuid:12345678-1234-1234-1234-123456789012\",\n        \"object\": {\n            \"type\": \"Document\",\n            \"id\": \"oai:HAL:hal-01478788\",\n            \"sorg:citation\": {\n                \"name\": \"SoftwareName\",\n                \"type\": \"Software\"\n            }\n        }\n    }\n}\n\nresponse = requests.post(\n    \"http://localhost:5000/inbox\",\n    headers={\"Content-Type\": \"application/json\"},\n    json=accept_payload\n)\n\nprint(f\"Status: {response.status_code}\")\nprint(f\"Response: {response.json()}\")"
-        },
-        "responses": {
-            "202": {
-                "description": "Notification accepted and processed",
-                "example": {
-                    "status": "ok",
-                    "type": "Accept",
-                    "actor": "https://orcid.org/0000-0000-0000-0000"
+                    "type": "Document",
+                    "id": "oai:HAL:hal-01478788",
+                    "sorg:citation": {
+                        "name": "SoftwareName",
+                        "type": "Software",
+                    },
                 },
-                "note": "The response contains the notification type and actor ID from the processed notification"
             },
-            "400": {
-                "description": "Invalid request - no JSON data provided or malformed request",
-                "note": "Occurs when the request doesn't contain valid JSON data"
-            }
         },
         "view_notifications": {
             "url": "/notifications",
             "method": "GET",
-            "description": "View all received notifications in a web interface"
-        }
+            "description": "View all received notifications in a web interface",
+        },
     })
 
 
 @coar_inbox_bp.route("/notifications", methods=["GET"])
 def show_notifications():
     """
-    Display all received notifications on a web page.
+    Display all received notifications from the ArangoDB-backed store.
     """
-    return render_template("notifications.html", notifications=received_notifications)
+    records = get_db().list_received_notifications(limit=200)
+    return render_template("notifications.html", records=records)

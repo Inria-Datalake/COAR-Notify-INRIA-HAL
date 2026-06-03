@@ -1,14 +1,14 @@
-import json
 import csv
+import datetime
+import json
 import logging
-import requests
-from typing import Dict, Any, List, Optional, Union
-from pyArango.connection import Connection
-from pyArango.theExceptions import CreationError
-from pyArango.database import Database
+from typing import Any, Dict, List, Optional, Union
+
 from pyArango.collection import Collection
+from pyArango.connection import Connection
+from pyArango.database import Database
+from pyArango.theExceptions import CreationError
 from werkzeug.datastructures import FileStorage
-from flask import current_app
 
 logger = logging.getLogger(__name__)
 
@@ -401,6 +401,7 @@ class DatabaseManager:
                         LET software = DOCUMENT(edge_soft._to)
                         FILTER software.software_name.normalizedForm == @software_name
                         UPDATE software WITH { verification_by_author: @verification } IN software
+                        RETURN NEW
             """
 
             bind_vars = {
@@ -442,6 +443,55 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to get collection count for {collection_name}: {e}")
             return 0
+
+    def get_document_by_key(self, collection_name: str, key: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a single document by `_key` from a named collection.
+        """
+        try:
+            query = f"FOR d IN {collection_name} FILTER d._key == @key RETURN d"
+            result = self.execute_aql_query(
+                query, bind_vars={'key': key}, raw_results=True
+            )
+            docs = list(result)
+            if docs:
+                return docs[0]
+        except Exception as e:
+            logger.error(f"Failed to get document by key {collection_name}/{key}: {e}")
+        return None
+
+    def store_received_notification(self, notification: Dict[str, Any]) -> None:
+        """
+        Persist an incoming COAR notification for later inspection via `/notifications`.
+        """
+        try:
+            collection = self.check_or_create_collection("received_notifications")
+            doc = collection.createDocument({
+                "received_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "payload": notification,
+            })
+            doc.save()
+        except Exception as e:
+            logger.error(f"Failed to persist received notification: {e}")
+
+    def list_received_notifications(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Return the most recent received notifications, newest first.
+        """
+        try:
+            # Ensure collection exists so the query doesn't fail on a cold DB.
+            self.check_or_create_collection("received_notifications")
+            query = """
+                FOR n IN received_notifications
+                    SORT n.received_at DESC
+                    LIMIT @limit
+                    RETURN n
+            """
+            result = self.execute_aql_query(query, bind_vars={'limit': limit}, raw_results=True)
+            return list(result)
+        except Exception as e:
+            logger.error(f"Failed to list received notifications: {e}")
+            return []
 
     def get_document_by_id(self, id: str) -> Optional[Dict[str, Any]]:
         """
@@ -489,24 +539,24 @@ class DatabaseManager:
         """
         try:
             query = """
-                LET doc = (
+                LET matching_docs = (
                     FOR d IN documents
                         FILTER d.file_hal_id == @document_id
                         RETURN d
                 )
 
                 LET software_to_delete = (
-                    FOR d IN documents
-                        FILTER d.file_hal_id == @document_id
+                    FOR d IN matching_docs
                         FOR edge IN edge_doc_to_software
                             FILTER edge._from == d._id
                             RETURN DOCUMENT(edge._to)
                 )
 
                 LET delete_edges = (
-                    FOR edge IN edge_doc_to_software
-                        FILTER edge._from IN DOCUMENT(doc)._id
-                        REMOVE edge IN edge_doc_to_software
+                    FOR d IN matching_docs
+                        FOR edge IN edge_doc_to_software
+                            FILTER edge._from == d._id
+                            REMOVE edge IN edge_doc_to_software
                 )
 
                 LET delete_software = (
@@ -515,8 +565,7 @@ class DatabaseManager:
                 )
 
                 LET delete_doc = (
-                    FOR d IN documents
-                        FILTER d.file_hal_id == @document_id
+                    FOR d IN matching_docs
                         REMOVE d IN documents
                 )
 

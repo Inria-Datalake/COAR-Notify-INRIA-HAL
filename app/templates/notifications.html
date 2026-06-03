@@ -5,12 +5,16 @@
 </head>
 <body>
     <h1>Received COAR Notifications</h1>
+    {% if not records %}
+        <p><em>No notifications received yet.</em></p>
+    {% endif %}
     <ul>
-        {% for notif in notifications %}
+        {% for record in records %}
             <li>
-                <strong>Type:</strong> {{ notif.type }}<br>
-                <strong>Actor:</strong> {{ notif.actor.id if notif.actor else 'N/A' }}<br>
-                <pre>{{ notif | tojson(indent=2) }}</pre>
+                <strong>Received at:</strong> {{ record.received_at }}<br>
+                <strong>Type:</strong> {{ record.payload.type }}<br>
+                <strong>Actor:</strong> {{ record.payload.actor.id if record.payload.actor else 'N/A' }}<br>
+                <pre>{{ record.payload | tojson(indent=2) }}</pre>
             </li>
         {% endfor %}
     </ul>
