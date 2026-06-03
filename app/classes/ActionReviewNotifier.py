@@ -31,6 +31,7 @@ class ActionReviewNotifier:
         mention_context,
         target_id,
         target_inbox,
+        mention_context_attributes=None,
         token=None,
     ):
         self.target_inbox = target_inbox
@@ -70,6 +71,11 @@ class ActionReviewNotifier:
                 },
                 "mentionType": mention_type,
                 "mentionContext": mention_context,
+                "mentionContextAttributes": mention_context_attributes or {
+                    "created": False,
+                    "used": False,
+                    "shared": False,
+                },
             },
         }
 

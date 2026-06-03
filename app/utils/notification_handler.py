@@ -321,6 +321,11 @@ def send_notifications_to_swh(document_id: str, notifications=None) -> dict[str,
                     software_name=software_name,
                     target_id="https://www.softwareheritage.org",
                     target_inbox=config["inbox_url"],
+                    mention_context_attributes={
+                        "created": bool(notification.get("created")),
+                        "used": bool(notification.get("used")),
+                        "shared": bool(notification.get("shared")),
+                    },
                     token=config["token"],
                 )
                 response = notifier.send()
@@ -413,6 +418,11 @@ def send_notifications_to_hal(document_id: str, notifications=None) -> dict[str,
                     software_repo=None,
                     mention_type="software",
                     mention_context=notification.get("contexts", []),
+                    mention_context_attributes={
+                        "created": bool(notification.get("created")),
+                        "used": bool(notification.get("used")),
+                        "shared": bool(notification.get("shared")),
+                    },
                     target_id=config["base_url"],
                     target_inbox=config["inbox_url"],
                     token=config["token"],
