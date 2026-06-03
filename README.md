@@ -559,6 +559,35 @@ SWH_BASE_URL=https://archive.softwareheritage.org
 SWH_INBOX_URL=https://inbox.softwareheritage.org
 ```
 
+### Software relationship in the payload (`mentionContextAttributes`)
+
+Every outbound notification reports how the software relates to the publication — whether it was
+`created` (developed in this work), `used`, and/or `shared` by the paper's authors. These flags are
+derived from the software-mention recognizer and aggregated per software in
+`db.get_software_notifications`.
+
+The flags are carried in a `mentionContextAttributes` object inside the notification `object`, for
+**both** provider payloads:
+
+- **HAL** (`ActionReview`): inside `object`, alongside `mentionType` / `mentionContext`.
+- **Software Heritage** (`RelationshipAnnounce`): inside the `Relationship` `object`, alongside `as:subject` / `as:relationship`.
+
+```json
+"mentionContextAttributes": {
+  "created": true,
+  "used":    true,
+  "shared":  false
+}
+```
+
+The key is always present; when no attributes are available it defaults to all `false`. Because these
+are the same flags that drive [Notification Filtering](#notification-filtering), a notification's
+attributes always agree with the filter mode it was sent under.
+
+Complete request examples for both providers are in
+[`docs/notif_test/`](docs/notif_test/) (`hal-offer-with-attributes.json`,
+`swh-announce-with-attributes.json`).
+
 ### Notification Filtering
 
 By default, every software mention extracted from a document generates a notification to its provider.
