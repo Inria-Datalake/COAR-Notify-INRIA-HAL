@@ -18,6 +18,7 @@ from research papers.
     - [Blacklist Management](#blacklist-management)
     - [COAR Notify Inbox](#coar-notify-inbox)
 - [Notification System](#notification-system)
+    - [Notification Filtering](#notification-filtering)
 - [Production Deployment](#production-deployment)
     - [Nginx Reverse Proxy](#nginx-reverse-proxy)
 - [Development](#development)
@@ -99,6 +100,10 @@ FLASK_PORT=5000
 - `ARANGO_USERNAME`: Username for ArangoDB (default: `root`)
 - `ARANGO_DB`: Database name (default: `COAR_NOTIFY_DB`)
 - `FLASK_PORT`: Port for Flask app (default: `5000`)
+- `HAL_NOTIFICATION_FILTER`: Which software mentions are sent to HAL (default: `all`); see
+  [Notification Filtering](#notification-filtering)
+- `SWH_NOTIFICATION_FILTER`: Which software mentions are sent to Software Heritage (default: `all`); see
+  [Notification Filtering](#notification-filtering)
 
 ## Database Schema
 
@@ -553,6 +558,47 @@ HAL_INBOX_URL=https://inbox-preprod.archives-ouvertes.fr/
 SWH_BASE_URL=https://archive.softwareheritage.org
 SWH_INBOX_URL=https://inbox.softwareheritage.org
 ```
+
+### Notification Filtering
+
+By default, every software mention extracted from a document generates a notification to its provider.
+You can restrict which mentions are sent on a **per-provider** basis, using the **mention context** of each
+software — whether it was `created` (developed in this work), `used`, or `shared` by the paper's authors.
+
+This is useful when a provider should only hear about a subset of mentions — for example, sending HAL only
+the software the authors *created*, or sending Software Heritage only software that was *shared*.
+
+Filtering is controlled by two environment variables (or the `NOTIFICATION_FILTER` block in `config.json`),
+each set to one of the following modes:
+
+| Mode                 | Sends a notification when the software is…                          |
+|----------------------|---------------------------------------------------------------------|
+| `all` (default)      | always — no filtering                                               |
+| `created`            | marked as *created*                                                 |
+| `used`               | marked as *used*                                                    |
+| `shared`             | marked as *shared*                                                  |
+| `reused`             | *used* but **not** *created* (i.e. a third-party dependency)        |
+| `reused_and_shared`  | *used* **and** *shared* but **not** *created*                       |
+| `created_not_shared` | *created* but **not** *shared*                                      |
+
+```bash
+# Send HAL only software the authors created; send everything to Software Heritage
+HAL_NOTIFICATION_FILTER=created
+SWH_NOTIFICATION_FILTER=all
+```
+
+Equivalent defaults in `config.json`:
+
+```json
+"NOTIFICATION_FILTER": {
+  "HAL": "all",
+  "SOFTWARE_HERITAGE": "all"
+}
+```
+
+An unknown or misspelled mode is **not** treated as an error: a warning is logged and all notifications are
+passed through unchanged, so a typo never silently drops notifications. The number of mentions skipped by a
+filter is logged per document.
 
 ## Receiving notifications
 
