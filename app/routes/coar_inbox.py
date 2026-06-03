@@ -1,16 +1,17 @@
 import logging
 
-from flask import request, jsonify, render_template
+from flask import Blueprint, request, jsonify, render_template
 
-from app.app import app
 from app.utils.notification_handler import accept_notification, reject_notification, \
     send_validation_to_viz
 
 logger = logging.getLogger(__name__)
 
+coar_inbox_bp = Blueprint("coar_inbox", __name__)
+
 received_notifications = []
 
-@app.route("/inbox", methods=["POST"])
+@coar_inbox_bp.route("/inbox", methods=["POST"])
 def receive_notification():
     """
     COAR Notify inbox.
@@ -58,7 +59,7 @@ def receive_notification():
         "actor": getattr(notification['actor'], "id", None)
     }), 202
 
-@app.route("/inbox", methods=["GET"])
+@coar_inbox_bp.route("/inbox", methods=["GET"])
 def inbox_description():
     """
     COAR Notify inbox description.
@@ -167,7 +168,7 @@ def inbox_description():
     })
 
 
-@app.route("/notifications", methods=["GET"])
+@coar_inbox_bp.route("/notifications", methods=["GET"])
 def show_notifications():
     """
     Display all received notifications on a web page.
