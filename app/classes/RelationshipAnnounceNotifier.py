@@ -99,7 +99,7 @@ class RelationshipAnnounceNotifier:
 
         # Add Authorization header if token is provided
         if self.token:
-            headers["Authorization"] = f"Token {self.token}"
+            headers["Authorization"] = f"Bearer {self.token}"
 
         payload = self.notification.to_jsonld()
 
@@ -109,7 +109,7 @@ class RelationshipAnnounceNotifier:
         # Add timeout to prevent hanging
         resp = None
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=10)
+            resp = requests.post(url, headers=headers, json=payload, timeout=20)
             resp.raise_for_status()
             return resp
         except requests.exceptions.Timeout:

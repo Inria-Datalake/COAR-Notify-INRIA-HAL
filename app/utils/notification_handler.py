@@ -1,8 +1,10 @@
 import logging
 import os
-from typing import Dict, Any, Optional
+import re
 from enum import Enum
+from typing import Any, Dict, Optional
 
+import requests
 from dotenv import load_dotenv
 
 from app.classes.ActionReviewNotifier import ActionReviewNotifier
@@ -10,6 +12,17 @@ from app.classes.RelationshipAnnounceNotifier import RelationshipAnnounceNotifie
 from app.utils.db import get_db
 
 logger = logging.getLogger(__name__)
+
+_OAI_HAL_PREFIX_RE = re.compile(r"^oai:hal:", re.IGNORECASE)
+
+
+def _origin_base_url() -> str:
+    """Public-facing base URL advertised as the origin of outbound COAR notifications."""
+    return os.getenv("COAR_ORIGIN_BASE_URL", "https://prod-datadcis-api.inria.fr/coar").rstrip("/")
+
+
+def _origin_inbox_url() -> str:
+    return f"{_origin_base_url()}/inbox"
 
 
 class ProviderType(Enum):
@@ -84,7 +97,7 @@ def extract_notification_data(notification: Dict[str, Any]) -> tuple[str, str]:
         provider = detect_provider_from_document_data(id_full)
 
         if provider == ProviderType.HAL:
-            doc_id = id_full.replace('oai:HAL:', '')
+            doc_id = _OAI_HAL_PREFIX_RE.sub('', id_full)
         else:
             # For other providers, use the ID as-is or apply provider-specific cleaning
             doc_id = id_full
@@ -229,10 +242,10 @@ def send_notifications_to_swh(document_id: str, notifications=None) -> Dict[str,
             try:
                 notifier = RelationshipAnnounceNotifier(
                     document_id,
-                    "https://prod-datadcis-api.inria.fr/coar",
-                    "Inria DataLake",
-                    "https://prod-datadcis-api.inria.fr/coar/inbox",
-                    software_name,
+                    actor_id=_origin_base_url(),
+                    actor_name="Inria DataLake",
+                    origin_inbox=_origin_inbox_url(),
+                    software_name=software_name,
                     target_id="https://www.softwareheritage.org",
                     target_inbox=config['inbox_url'],
                     token=config['token']
@@ -293,9 +306,9 @@ def send_notifications_to_hal(document_id: str, notifications=None) -> Dict[str,
             try:
                 notifier = ActionReviewNotifier(
                     document_id,
-                    actor_id="https://datalake.inria.fr",
+                    actor_id=_origin_base_url(),
                     actor_name="Inria DataLake",
-                    origin_inbox="https://prod-datadcis-api.inria.fr/coar/inbox",
+                    origin_inbox=_origin_inbox_url(),
                     software_name=software_name,
                     software_repo=None,
                     mention_type="software",
@@ -351,7 +364,6 @@ def send_validation_to_viz(document_id: str, software_name: str, accepted: bool 
     if config['token']:
         headers['Authorization'] = f'Bearer {config["token"]}'
 
-    import requests
     try:
         response = requests.post(
             url,
