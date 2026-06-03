@@ -1,0 +1,60 @@
+{
+    "@context": [
+        "https://www.w3.org/ns/activitystreams",
+        "https://purl.org/coar/notify"
+    ],
+    "actor": {
+        "id": "https://prod-datadcis-api.inria.fr/coar",
+        "type": "Organization",
+        "name": "Inria DataLake"
+    },
+    "context": {
+        "id": "https://hal.science/hal-03685380v1",
+        "sorg:name": null,
+        "sorg:author": {
+            "@type": "Person",
+            "givenName": null,
+            "email": null
+        },
+        "ietf:cite-as": "https://doi.org/XXX/YYY",
+        "ietf:item": {
+            "id": "https://hal.science/hal-03685380v1/document",
+            "mediaType": "application/pdf",
+            "type": [
+                "Object",
+                "sorg:ScholarlyArticle"
+            ]
+        },
+        "type": [
+            "Page",
+            "sorg:AboutPage"
+        ]
+    },
+    "id": "urn:uuid:5fed3179-9b94-414d-a42c-f35ca587c509",
+    "object": {
+        "as:object": "https://hal.science/hal-03685380v1",
+        "as:relationship": "https://w3id.org/codemeta/3.0#citation",
+        "as:subject": "PyPDEVS",
+        "id": "urn:uuid:7644ea0f-c1f3-419f-8132-f45f357237ea",
+        "type": "Relationship",
+        "mentionContextAttributes": {
+            "created": false,
+            "used": true,
+            "shared": true
+        }
+    },
+    "origin": {
+        "id": "https://prod-datadcis-api.inria.fr/coar",
+        "type": "Service",
+        "inbox": "https://prod-datadcis-api.inria.fr/coar/inbox"
+    },
+    "target": {
+        "id": "https://www.softwareheritage.org",
+        "type": "Service",
+        "inbox": "https://inbox.staging.swh.network/"
+    },
+    "type": [
+        "Announce",
+        "coar-notify:RelationshipAction"
+    ]
+}
