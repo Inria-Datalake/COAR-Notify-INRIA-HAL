@@ -17,29 +17,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+        run: uv sync
 
       - name: Lint (ruff)
         run: |
-          ruff check app run.py
-          ruff format --check app run.py
+          uv run ruff check app run.py
+          uv run ruff format --check app run.py
 
       - name: Type check (mypy)
-        run: |
-          mypy app || true
+        run: uv run mypy app || true
 
       - name: Syntax check (compileall)
         run: |
-          python -m compileall -q app sandbox || (echo 'Python syntax errors found' && exit 1)
+          uv run python -m compileall -q app sandbox || (echo 'Python syntax errors found' && exit 1)
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

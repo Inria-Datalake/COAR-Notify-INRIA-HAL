@@ -746,11 +746,12 @@ services:
 
 ### Code Quality
 
-Development tools are pinned in `requirements-dev.txt` (`ruff`, `mypy`,
-`bump-my-version`); install them with:
+Development tools are pinned in the `dev` dependency group in `pyproject.toml`
+(`ruff`, `mypy`, `bump-my-version`). Install them with [uv](https://docs.astral.sh/uv/),
+which syncs runtime deps and the `dev` group from `uv.lock` by default:
 
 ```sh
-pip install -r requirements-dev.txt
+uv sync
 ```
 
 Linting and formatting use [Ruff](https://docs.astral.sh/ruff/). The CI build
@@ -758,22 +759,22 @@ Linting and formatting use [Ruff](https://docs.astral.sh/ruff/). The CI build
 
 ```sh
 # Check lint and formatting (these are the exact steps CI runs)
-ruff check app run.py
-ruff format --check app run.py
+uv run ruff check app run.py
+uv run ruff format --check app run.py
 
 # Auto-fix lint findings and reformat in place
-ruff check --fix app run.py
-ruff format app run.py
+uv run ruff check --fix app run.py
+uv run ruff format app run.py
 ```
 
-Install the pinned Ruff version from `requirements-dev.txt` — a newer Ruff may
-report different issues than CI and make your local results disagree with the
-pipeline.
+Running through `uv run` uses the pinned Ruff version from `uv.lock` — a newer
+Ruff may report different issues than CI and make your local results disagree
+with the pipeline.
 
 Type checking is relaxed for now and runs **non-blocking** in CI:
 
 ```sh
-mypy app
+uv run mypy app
 ```
 
 ### Releasing
@@ -784,7 +785,7 @@ Releases are cut manually with `bump-my-version`; CI handles the rest on tag pus
 2. Bump the version — this updates `pyproject.toml`, commits, and creates a
    `vX.Y.Z` tag:
    ```sh
-   bump-my-version bump [patch|minor|major]
+   uv run bump-my-version bump [patch|minor|major]
    ```
 3. Push the commit and the tag:
    ```sh
