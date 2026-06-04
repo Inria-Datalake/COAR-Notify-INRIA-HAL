@@ -30,15 +30,19 @@ def can_upload():
                 existing[collection] = False
 
         can_upload = all(existing.values())
-        return jsonify({
-            "status": "ok" if can_upload else "error",
-            "can_upload": can_upload,
-            "collections": existing,
-        })
+        return jsonify(
+            {
+                "status": "ok" if can_upload else "error",
+                "can_upload": can_upload,
+                "collections": existing,
+            }
+        )
     except Exception as e:
         logger.error(f"Status check failed: {e}")
-        return jsonify({
-            "status": "error",
-            "message": str(e),
-            "can_upload": False,
-        }), 500
+        return jsonify(
+            {
+                "status": "error",
+                "message": str(e),
+                "can_upload": False,
+            }
+        ), 500

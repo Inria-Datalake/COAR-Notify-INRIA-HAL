@@ -1,6 +1,7 @@
-import requests
-import uuid
 import logging
+import uuid
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,6 @@ class ActionReviewSoftware:
 
 
 class ActionReviewNotifier:
-
     # Attribute annotations for static analyzers
     notification: ActionReviewSoftware
     target_inbox: str
@@ -40,12 +40,9 @@ class ActionReviewNotifier:
         notification_id = uuid.uuid4().urn
 
         payload = {
-            "@context": [
-                "https://www.w3.org/ns/activitystreams",
-                "https://purl.org/coar/notify"
-            ],
+            "@context": ["https://www.w3.org/ns/activitystreams", "https://purl.org/coar/notify"],
             "id": notification_id,
-            "type": ['Offer', 'coar-notify:ReviewAction'],
+            "type": ["Offer", "coar-notify:ReviewAction"],
             "actor": {
                 "id": actor_id,
                 "type": "Service",
@@ -73,7 +70,7 @@ class ActionReviewNotifier:
                 },
                 "mentionType": mention_type,
                 "mentionContext": mention_context,
-            }
+            },
         }
 
         self.notification = ActionReviewSoftware(payload)

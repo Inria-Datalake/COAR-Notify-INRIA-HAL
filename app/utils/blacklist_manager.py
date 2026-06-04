@@ -1,12 +1,11 @@
 import csv
 import logging
 import os
-from typing import List, Set
 
 logger = logging.getLogger(__name__)
 
 # Global blacklist cache
-_blacklist_cache: Set[str] = set()
+_blacklist_cache: set[str] = set()
 _blacklist_file_path = "./app/static/data/blacklist.csv"
 
 
@@ -28,7 +27,7 @@ class BlacklistManager:
         self.blacklist_path = blacklist_path or _blacklist_file_path
         self.load_blacklist()
 
-    def load_blacklist(self) -> Set[str]:
+    def load_blacklist(self) -> set[str]:
         """
         Load blacklist terms from CSV file into cache.
 
@@ -44,14 +43,14 @@ class BlacklistManager:
                     reader = csv.reader(csvfile)
                     # Skip header if exists
                     first_row = next(reader, None)
-                    if first_row and first_row[0].lower() in ['term', 'word', 'pattern']:
+                    if first_row and first_row[0].lower() in ["term", "word", "pattern"]:
                         pass  # Header row, already skipped
 
                     for row in reader:
                         if row and row[0]:
                             # Clean up the term
                             term = row[0].strip()
-                            if term and term != '':
+                            if term and term != "":
                                 blacklist.add(term)
 
                 _blacklist_cache = blacklist
@@ -66,7 +65,7 @@ class BlacklistManager:
 
         return _blacklist_cache
 
-    def get_blacklist(self) -> Set[str]:
+    def get_blacklist(self) -> set[str]:
         """
         Get the current blacklist from cache.
 
@@ -163,10 +162,10 @@ class BlacklistManager:
             "total_terms": len(_blacklist_cache),
             "file_path": self.blacklist_path,
             "file_exists": os.path.exists(self.blacklist_path),
-            "last_loaded": "At startup"  # Could be enhanced with timestamp
+            "last_loaded": "At startup",  # Could be enhanced with timestamp
         }
 
-    def search_blacklist(self, query: str, limit: int = 50) -> List[str]:
+    def search_blacklist(self, query: str, limit: int = 50) -> list[str]:
         """
         Search for terms in the blacklist.
 
@@ -181,10 +180,7 @@ class BlacklistManager:
             return []
 
         query_lower = query.lower()
-        matches = [
-            term for term in _blacklist_cache
-            if query_lower in term.lower()
-        ]
+        matches = [term for term in _blacklist_cache if query_lower in term.lower()]
 
         return sorted(matches)[:limit]
 
@@ -196,6 +192,7 @@ class BlacklistManager:
             CSV string representation of the blacklist
         """
         import io
+
         output = io.StringIO()
         writer = csv.writer(output)
 
@@ -222,19 +219,20 @@ class BlacklistManager:
         try:
             # Parse CSV content
             import io
+
             csv_file = io.StringIO(csv_content)
             reader = csv.reader(csv_file)
 
             # Skip header if exists
             first_row = next(reader, None)
-            if first_row and first_row[0].lower() in ['term', 'word', 'pattern']:
+            if first_row and first_row[0].lower() in ["term", "word", "pattern"]:
                 pass  # Header row
 
             new_terms = set()
             for row in reader:
                 if row and row[0]:
                     term = row[0].strip()
-                    if term and term != '':
+                    if term and term != "":
                         new_terms.add(term)
 
             if overwrite:
@@ -245,21 +243,20 @@ class BlacklistManager:
                 # Merge with existing blacklist
                 _blacklist_cache.update(new_terms)
                 self._save_blacklist()
-                logger.info(f"Added {len(new_terms)} new terms to blacklist (total: {len(_blacklist_cache)})")
+                logger.info(
+                    f"Added {len(new_terms)} new terms to blacklist (total: {len(_blacklist_cache)})"
+                )
 
             return {
                 "success": True,
                 "imported_terms": len(new_terms),
                 "total_terms": len(_blacklist_cache),
-                "overwrite": overwrite
+                "overwrite": overwrite,
             }
 
         except Exception as e:
             logger.error(f"Failed to import blacklist: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
 
 # Global blacklist manager instance
