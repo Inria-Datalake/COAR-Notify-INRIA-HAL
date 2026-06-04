@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from app import __version__
 from app.routes.api_documents import api_documents_bp
 from app.routes.api_software import api_software_bp
 from app.routes.api_status import api_status_bp
@@ -34,6 +35,13 @@ app.config["HAL_NOTIFICATION_FILTER"] = os.environ.get("HAL_NOTIFICATION_FILTER"
 app.config["SWH_NOTIFICATION_FILTER"] = os.environ.get("SWH_NOTIFICATION_FILTER", "all")
 
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+
+@app.context_processor
+def inject_app_version():
+    """Make the application version available to every template as ``app_version``."""
+    return {"app_version": __version__}
+
 
 app.register_blueprint(api_documents_bp)
 app.register_blueprint(api_software_bp)
@@ -84,6 +92,7 @@ def health():
             return jsonify(
                 {
                     "status": "up",
+                    "version": __version__,
                     "arango": {
                         "host": connection_info["host"],
                         "port": connection_info["port"],

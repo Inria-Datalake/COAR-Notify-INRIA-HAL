@@ -24,6 +24,21 @@ class DatabaseManager:
     providing a clean interface for database operations throughout the application.
     """
 
+    # Persistent indexes ensured (idempotently) the first time each collection is
+    # accessed. Keyed by collection name; each spec is the field list plus options.
+    COLLECTION_INDEXES: dict[str, list[dict[str, Any]]] = {
+        # Enforce one record per HAL document at the DB level (app code also checks
+        # via document_exists, this is the hard guarantee) and speed up lookups.
+        "documents": [
+            {"fields": ["file_hal_id"], "unique": True},
+        ],
+        # Notifications are filtered by origin and sorted newest-first by received_at.
+        "received_notifications": [
+            {"fields": ["origin"]},
+            {"fields": ["received_at"]},
+        ],
+    }
+
     def __init__(self, host: str, port: int, username: str, password: str, db_name: str):
         """
         Initialize the DatabaseManager.
@@ -42,6 +57,9 @@ class DatabaseManager:
         self.db_name = db_name
         self._connection: Connection | None = None
         self._database: Database | None = None
+        # Collections whose indexes have already been ensured this process, so we
+        # don't re-issue ensure* HTTP calls on every store/list operation.
+        self._indexed_collections: set[str] = set()
 
     def connect(self) -> Connection:
         """
@@ -160,7 +178,9 @@ class DatabaseManager:
         db = self.get_database()
 
         if db.hasCollection(collection_name):
-            return db[collection_name]
+            collection = db[collection_name]
+            self._ensure_indexes(collection)
+            return collection
 
         try:
             db.createCollection(collection_type, name=collection_name)
@@ -169,7 +189,34 @@ class DatabaseManager:
             # Likely created concurrently by another worker
             logger.info(f"Collection {collection_name} already exists (created by another worker)")
 
-        return db[collection_name]
+        collection = db[collection_name]
+        self._ensure_indexes(collection)
+        return collection
+
+    def _ensure_indexes(self, collection: Collection) -> None:
+        """
+        Create the persistent indexes declared for this collection, if any.
+
+        Idempotent and cheap: pyArango's ensurePersistentIndex is a no-op when the
+        index already exists, and we additionally skip the call entirely once a
+        collection has been handled in this process. Index failures are logged but
+        never propagated, so they cannot break the surrounding request.
+        """
+        name = collection.name
+        if name in self._indexed_collections:
+            return
+
+        for spec in self.COLLECTION_INDEXES.get(name, []):
+            try:
+                collection.ensurePersistentIndex(spec["fields"], unique=spec.get("unique", False))
+                logger.debug(
+                    f"Ensured index on {name}.{'.'.join(spec['fields'])} "
+                    f"(unique={spec.get('unique', False)})"
+                )
+            except Exception as e:
+                logger.error(f"Failed to ensure index on {name}.{spec['fields']}: {e}")
+
+        self._indexed_collections.add(name)
 
     def get_collection(self, collection_name: str) -> Collection | None:
         """
