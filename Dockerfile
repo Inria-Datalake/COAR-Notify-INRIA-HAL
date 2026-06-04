@@ -7,8 +7,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install runtime dependencies from pyproject (cached unless metadata changes)
+COPY pyproject.toml README.md ./
+COPY app ./app
+RUN pip install --no-cache-dir .
 
 # Copy the wait-for-it script with executable permissions to PATH
 COPY --chmod=0755 wait-for-it.sh /usr/local/bin/wait-for-it
