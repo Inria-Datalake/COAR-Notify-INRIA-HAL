@@ -20,10 +20,12 @@ def documents_status():
     try:
         db_manager = get_db()
         total_count = db_manager.get_collection_count("documents")
-        return jsonify({
-            "collection_name": "documents",
-            "total_documents": total_count,
-        })
+        return jsonify(
+            {
+                "collection_name": "documents",
+                "total_documents": total_count,
+            }
+        )
     except Exception as e:
         logger.error(f"Failed to get documents status: {e}")
         return jsonify({"error": "Failed to retrieve documents status"}), 500
@@ -56,11 +58,13 @@ def delete_document(id):
 
         deletion_result = db_manager.delete_document_by_id(id)
         if deletion_result:
-            return jsonify({
-                "status": "deleted",
-                "document_id": id,
-                "software_deleted": deletion_result.get("software_deleted", 0),
-            })
+            return jsonify(
+                {
+                    "status": "deleted",
+                    "document_id": id,
+                    "software_deleted": deletion_result.get("software_deleted", 0),
+                }
+            )
         return jsonify({"error": "Failed to delete document"}), 500
     except Exception as e:
         logger.error(f"Failed to delete document {id}: {e}")
@@ -77,17 +81,13 @@ def document_software_all_from_id(id_document):
         return jsonify({"error": "Failed to retrieve document software"}), 500
 
 
-@api_documents_bp.route(
-    "/api/document/<id_document>/software/<id_software>", methods=["GET"]
-)
+@api_documents_bp.route("/api/document/<id_document>/software/<id_software>", methods=["GET"])
 def document_software_from_id(id_document, id_software):
     try:
         db_manager = get_db()
         return jsonify(db_manager.get_document_software(id_document, id_software))
     except Exception as e:
-        logger.error(
-            f"Failed to get software {id_software} for document {id_document}: {e}"
-        )
+        logger.error(f"Failed to get software {id_software} for document {id_document}: {e}")
         return jsonify({"error": "Failed to retrieve document software"}), 500
 
 
@@ -115,11 +115,13 @@ def insert_new_document():
         return jsonify({"error": f"Insertion failed: {str(e)}"}), 500
 
     if not inserted:
-        return jsonify({
-            "status": "exists",
-            "message": "Document already exists in the database",
-            "document_id": document_id,
-        }), 409
+        return jsonify(
+            {
+                "status": "exists",
+                "message": "Document already exists in the database",
+                "document_id": document_id,
+            }
+        ), 409
 
     notifications = get_software_notifications(document_id)
     notification_results = {}
@@ -145,15 +147,17 @@ def insert_new_document():
     total_sent = sum(r.get("sent", 0) for r in notification_results.values())
     total_failed = sum(r.get("failed", 0) for r in notification_results.values())
 
-    return jsonify({
-        "status": "inserted",
-        "document_id": document_id,
-        "notifications": {
-            "summary": {
-                "total_sent": total_sent,
-                "total_failed": total_failed,
-                "total_attempts": total_sent + total_failed,
+    return jsonify(
+        {
+            "status": "inserted",
+            "document_id": document_id,
+            "notifications": {
+                "summary": {
+                    "total_sent": total_sent,
+                    "total_failed": total_failed,
+                    "total_attempts": total_sent + total_failed,
+                },
+                "by_provider": notification_results,
             },
-            "by_provider": notification_results,
-        },
-    }), 201
+        }
+    ), 201

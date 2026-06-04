@@ -72,11 +72,13 @@ def receive_notification():
     # Use the same classification we stored, so dispatch and tagging never disagree.
     if origin == ORIGIN_SWH:
         logger.info("Notification originated from Software Heritage is ignored.")
-        return jsonify({
-            "status": "ignored",
-            "reason": "Notification from Software Heritage",
-            "actor": _origin_id(notification) or _SWH_ORIGIN,
-        }), 202
+        return jsonify(
+            {
+                "status": "ignored",
+                "reason": "Notification from Software Heritage",
+                "actor": _origin_id(notification) or _SWH_ORIGIN,
+            }
+        ), 202
 
     if notification_type in ("Accept", "Reject"):
         hal_id_full = notification["object"]["object"]["id"]
@@ -92,11 +94,13 @@ def receive_notification():
         send_validation_to_viz(hal_id, software_name, accepted)
 
     actor = notification.get("actor") or {}
-    return jsonify({
-        "status": "ok",
-        "type": notification_type,
-        "actor": actor.get("id"),
-    }), 202
+    return jsonify(
+        {
+            "status": "ok",
+            "type": notification_type,
+            "actor": actor.get("id"),
+        }
+    ), 202
 
 
 @coar_inbox_bp.route("/inbox", methods=["GET"])
@@ -104,73 +108,75 @@ def inbox_description():
     """
     COAR Notify inbox description.
     """
-    return jsonify({
-        "title": "COAR Notify Inbox",
-        "description": "Receives COAR-compliant notifications for software mention verification",
-        "version": "1.0",
-        "endpoints": {
-            "POST": {
-                "url": "/inbox",
-                "method": "POST",
-                "content_type": "application/json",
-                "description": "Send a COAR notification to verify or reject software mentions",
+    return jsonify(
+        {
+            "title": "COAR Notify Inbox",
+            "description": "Receives COAR-compliant notifications for software mention verification",
+            "version": "1.0",
+            "endpoints": {
+                "POST": {
+                    "url": "/inbox",
+                    "method": "POST",
+                    "content_type": "application/json",
+                    "description": "Send a COAR notification to verify or reject software mentions",
+                },
+                "GET": {
+                    "url": "/inbox",
+                    "method": "GET",
+                    "description": "Get this API documentation",
+                },
             },
-            "GET": {
-                "url": "/inbox",
-                "method": "GET",
-                "description": "Get this API documentation",
-            },
-        },
-        "supported_notification_types": [
-            {
+            "supported_notification_types": [
+                {
+                    "type": "Accept",
+                    "description": "Accepts a software mention as verified by the author",
+                },
+                {
+                    "type": "Reject",
+                    "description": "Rejects a software mention as not verified by the author",
+                },
+            ],
+            "request_example": {
                 "type": "Accept",
-                "description": "Accepts a software mention as verified by the author",
-            },
-            {
-                "type": "Reject",
-                "description": "Rejects a software mention as not verified by the author",
-            },
-        ],
-        "request_example": {
-            "type": "Accept",
-            "actor": {
-                "type": "Person",
-                "id": "https://orcid.org/0000-0000-0000-0000",
-            },
-            "object": {
-                "type": "Offer",
-                "id": "urn:uuid:12345678-1234-1234-1234-123456789012",
+                "actor": {
+                    "type": "Person",
+                    "id": "https://orcid.org/0000-0000-0000-0000",
+                },
                 "object": {
-                    "type": "Document",
-                    "id": "oai:HAL:hal-01478788",
-                    "sorg:citation": {
-                        "name": "SoftwareName",
-                        "type": "Software",
+                    "type": "Offer",
+                    "id": "urn:uuid:12345678-1234-1234-1234-123456789012",
+                    "object": {
+                        "type": "Document",
+                        "id": "oai:HAL:hal-01478788",
+                        "sorg:citation": {
+                            "name": "SoftwareName",
+                            "type": "Software",
+                        },
                     },
                 },
             },
-        },
-        "view_notifications": {
-            "url": "/notifications",
-            "method": "GET",
-            "description": "View all received notifications in a web interface",
-        },
-        "api_notifications": {
-            "list": {
-                "url": "/api/notifications?limit=100&origin=swh",
+            "view_notifications": {
+                "url": "/notifications",
                 "method": "GET",
-                "auth": "x-api-key header required",
-                "description": "List recent received notifications as JSON, newest first. "
-                               "Optional origin filter: swh or hal.",
+                "description": "View all received notifications in a web interface",
             },
-            "get": {
-                "url": "/api/notifications/<key>",
-                "method": "GET",
-                "auth": "x-api-key header required",
-                "description": "Fetch a single received notification by its storage key",
+            "api_notifications": {
+                "list": {
+                    "url": "/api/notifications?limit=100&origin=swh",
+                    "method": "GET",
+                    "auth": "x-api-key header required",
+                    "description": "List recent received notifications as JSON, newest first. "
+                    "Optional origin filter: swh or hal.",
+                },
+                "get": {
+                    "url": "/api/notifications/<key>",
+                    "method": "GET",
+                    "auth": "x-api-key header required",
+                    "description": "Fetch a single received notification by its storage key",
+                },
             },
-        },
-    })
+        }
+    )
 
 
 @coar_inbox_bp.route("/notifications", methods=["GET"])
@@ -199,9 +205,11 @@ def api_list_notifications():
     if origin is not None:
         origin = origin.lower()
         if origin not in KNOWN_ORIGINS:
-            return jsonify({
-                "error": f"Invalid origin '{origin}'. Expected one of: {', '.join(KNOWN_ORIGINS)}.",
-            }), 400
+            return jsonify(
+                {
+                    "error": f"Invalid origin '{origin}'. Expected one of: {', '.join(KNOWN_ORIGINS)}.",
+                }
+            ), 400
 
     try:
         records = get_db().list_received_notifications(limit=limit, origin=origin)

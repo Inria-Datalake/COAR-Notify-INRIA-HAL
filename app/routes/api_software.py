@@ -16,10 +16,12 @@ def software_status():
     try:
         db_manager = get_db()
         total_count = db_manager.get_collection_count("software")
-        return jsonify({
-            "collection_name": "software",
-            "total_documents": total_count,
-        })
+        return jsonify(
+            {
+                "collection_name": "software",
+                "total_documents": total_count,
+            }
+        )
     except Exception as e:
         logger.error(f"Failed to get software status: {e}")
         return jsonify({"error": "Failed to retrieve software status"}), 500
@@ -50,6 +52,7 @@ def software_mention_from_id(id_mention):
 
 # Blacklist management endpoints
 
+
 @api_software_bp.route("/api/blacklist", methods=["GET"])
 def get_blacklist():
     try:
@@ -60,20 +63,24 @@ def get_blacklist():
 
         if search_query:
             terms = blacklist_manager.search_blacklist(search_query, limit)
-            return jsonify({
-                "stats": stats,
-                "terms": terms,
-                "search_query": search_query,
-                "limit": limit,
-                "total_matches": len(terms),
-            })
+            return jsonify(
+                {
+                    "stats": stats,
+                    "terms": terms,
+                    "search_query": search_query,
+                    "limit": limit,
+                    "total_matches": len(terms),
+                }
+            )
 
         all_terms = sorted(blacklist_manager.get_blacklist())
-        return jsonify({
-            "stats": stats,
-            "terms": all_terms,
-            "total_count": len(all_terms),
-        })
+        return jsonify(
+            {
+                "stats": stats,
+                "terms": all_terms,
+                "total_count": len(all_terms),
+            }
+        )
     except Exception as e:
         logger.error(f"Failed to get blacklist: {e}")
         return jsonify({"error": "Failed to retrieve blacklist"}), 500
@@ -101,16 +108,20 @@ def add_to_blacklist():
             return jsonify({"error": "term cannot be empty"}), 400
 
         if blacklist_manager.add_to_blacklist(term):
-            return jsonify({
-                "success": True,
-                "message": f"Term '{term}' added to blacklist",
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"Term '{term}' added to blacklist",
+                    "term": term,
+                }
+            ), 201
+        return jsonify(
+            {
+                "success": False,
+                "message": f"Term '{term}' already exists in blacklist",
                 "term": term,
-            }), 201
-        return jsonify({
-            "success": False,
-            "message": f"Term '{term}' already exists in blacklist",
-            "term": term,
-        }), 409
+            }
+        ), 409
     except Exception as e:
         logger.error(f"Failed to add term to blacklist: {e}")
         return jsonify({"error": "Failed to add term to blacklist"}), 500
@@ -121,16 +132,20 @@ def add_to_blacklist():
 def remove_from_blacklist(term):
     try:
         if blacklist_manager.remove_from_blacklist(term):
-            return jsonify({
-                "success": True,
-                "message": f"Term '{term}' removed from blacklist",
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"Term '{term}' removed from blacklist",
+                    "term": term,
+                }
+            )
+        return jsonify(
+            {
+                "success": False,
+                "message": f"Term '{term}' not found in blacklist",
                 "term": term,
-            })
-        return jsonify({
-            "success": False,
-            "message": f"Term '{term}' not found in blacklist",
-            "term": term,
-        }), 404
+            }
+        ), 404
     except Exception as e:
         logger.error(f"Failed to remove term from blacklist: {e}")
         return jsonify({"error": "Failed to remove term from blacklist"}), 500
@@ -141,11 +156,13 @@ def remove_from_blacklist(term):
 def reload_blacklist():
     try:
         term_count = blacklist_manager.reload_blacklist()
-        return jsonify({
-            "success": True,
-            "message": "Blacklist reloaded successfully",
-            "total_terms": term_count,
-        })
+        return jsonify(
+            {
+                "success": True,
+                "message": "Blacklist reloaded successfully",
+                "total_terms": term_count,
+            }
+        )
     except Exception as e:
         logger.error(f"Failed to reload blacklist: {e}")
         return jsonify({"error": "Failed to reload blacklist"}), 500
@@ -181,16 +198,20 @@ def import_blacklist():
         result = blacklist_manager.import_blacklist_from_csv(csv_content, overwrite)
 
         if result["success"]:
-            return jsonify({
-                "success": True,
-                "message": f"Successfully imported {result['imported_terms']} terms",
-                "total_terms": result["total_terms"],
-                "overwrite": result["overwrite"],
-            })
-        return jsonify({
-            "success": False,
-            "error": result.get("error", "Import failed"),
-        }), 400
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"Successfully imported {result['imported_terms']} terms",
+                    "total_terms": result["total_terms"],
+                    "overwrite": result["overwrite"],
+                }
+            )
+        return jsonify(
+            {
+                "success": False,
+                "error": result.get("error", "Import failed"),
+            }
+        ), 400
     except Exception as e:
         logger.error(f"Failed to import blacklist: {e}")
         return jsonify({"error": "Failed to import blacklist"}), 500

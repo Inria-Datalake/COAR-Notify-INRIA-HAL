@@ -9,20 +9,16 @@ The COAR Notify INRIA HAL system uses ArangoDB as its primary database, leveragi
 - **Database Name**: `COAR_NOTIFY_DB`
 - **Database Type**: ArangoDB (Document + Graph Database)
 - **Default Host**: `localhost:8529`
-- **Configuration**: Defined in `config.json`
+- **Configuration**: Environment variables (see `.env.example` and `README.md`)
 
-### Configuration File
+### Relevant environment variables
 
-```json
-{
-  "ARANGO_CONFIG": {
-    "ARANGO_HOST": "localhost",
-    "ARANGO_PORT": 8529,
-    "ARANGO_DB": "COAR_NOTIFY_DB",
-    "ARANGO_USERNAME": "root",
-    "ARANGO_PASSWORD": "changeme"
-  }
-}
+```
+ARANGO_HOST=localhost
+ARANGO_PORT=8529
+ARANGO_DB=COAR_NOTIFY_DB
+ARANGO_USERNAME=root
+ARANGO_ROOT_PASSWORD=examplepassword
 ```
 
 ## Collections
@@ -157,6 +153,38 @@ Each attribute has:
 - Edges can only connect `documents` to `software` collections
 - Referential integrity is enforced by ArangoDB
 
+---
+
+### 4. Received Notifications Collection (`received_notifications`)
+
+**Type**: Document Collection
+**Purpose**: Persists every inbound COAR notification accepted by `POST /inbox` (after the SWH-origin loop-prevention filter). Used by `GET /notifications` to render an HTML log for inspection.
+
+#### Schema
+
+```json
+{
+  "_key": "auto-generated",
+  "_id": "received_notifications/123456",
+  "received_at": "2026-04-16T07:30:00.000000Z",
+  "payload": { "...": "raw COAR JSON-LD as received" }
+}
+```
+
+#### Fields
+
+| Field | Type | Description | Required |
+|-------|------|-------------|----------|
+| `_key` | string | Auto-generated unique identifier | Yes |
+| `_id` | string | Auto-generated document ID | Yes |
+| `received_at` | string | ISO-8601 UTC timestamp (`Z` suffix) of arrival | Yes |
+| `payload` | object | The raw notification body as received | Yes |
+
+#### Access
+
+- Written by `DatabaseManager.store_received_notification` (see `app/utils/db.py`)
+- Read by `DatabaseManager.list_received_notifications` (newest-first, limit-bounded)
+
 ## Data Flow
 
 ### 1. Document Ingestion
@@ -181,7 +209,7 @@ graph TD
 ### 2. Software Extraction
 
 1. Software mentions are extracted from the `mentions` array
-2. Each mention is filtered against a blacklist of 255+ generic terms
+2. Each mention is filtered against the blacklist in `app/static/data/blacklist.csv`
 3. Valid software entries are stored in `software` collection
 4. Field normalization occurs (`software-name` → `software_name`)
 
@@ -220,12 +248,11 @@ graph LR
 
 ### Provider Detection
 
-The system supports multiple data providers with automatic detection:
+`detect_provider_from_document_data` in `app/utils/notification_handler.py` dispatches based on the document ID prefix (case-insensitive):
 
-- **HAL**: `hal-`, `oai:hal:`, `.hal.` patterns
-- **Software Heritage**: `swh-`, `softwareheritage`, `.swh.` patterns
-- **Zenodo**: `zenodo-`, `.zenodo.` patterns
-- **GitHub**: `github-`, `.github.` patterns
+- **HAL**: `oai:hal:` prefix → `ActionReview` notifications
+- **Software Heritage**: `swh:` prefix → `RelationshipAnnounce` notifications
+- **Anything else**: returns `UNKNOWN` and is not dispatched
 
 ### Notification System
 
@@ -295,23 +322,7 @@ FOR doc IN documents
 
 ## API Endpoints
 
-### Document Management
-- `POST /api/document` - Insert new document with software mentions
-- `GET /api/software/status` - Get collection statistics
-- `GET /api/software/<id>` - Get software by ID
-- `GET /api/software_mention/<id>` - Get specific software mention
-
-### Blacklist Management
-- `GET /api/blacklist` - View blacklist with search
-- `GET /api/blacklist/stats` - Get blacklist statistics
-- `POST /api/blacklist` - Add term to blacklist (API key required)
-- `DELETE /api/blacklist/<term>` - Remove term from blacklist (API key required)
-- `GET /api/blacklist/export` - Export blacklist as CSV
-- `POST /api/blacklist/import` - Import blacklist from CSV
-
-### Provider Detection
-- `GET /api/software/provider/<filename>` - Detect provider from filename
-- `GET /api/software/providers` - List all supported providers
+See [API Documentation](../README.md#api-documentation) in the main README for the full endpoint reference. This file focuses on the database schema only.
 
 ## Performance Considerations
 
@@ -366,7 +377,7 @@ FOR doc IN documents
 
 ### Health Checks
 - `GET /health` - Database and application health status
-- `GET /api/software/status` - Collection statistics
+- `GET /api/software` - Collection statistics
 - Database connection monitoring via logs
 
 ## Troubleshooting

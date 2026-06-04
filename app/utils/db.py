@@ -2,7 +2,7 @@ import csv
 import datetime
 import json
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Union
 
 from pyArango.collection import Collection
 from pyArango.connection import Connection
@@ -13,7 +13,7 @@ from werkzeug.datastructures import FileStorage
 logger = logging.getLogger(__name__)
 
 # Global database manager instance
-db_manager: Union['DatabaseManager', None] = None
+db_manager: Union["DatabaseManager", None] = None
 
 
 class DatabaseManager:
@@ -40,8 +40,8 @@ class DatabaseManager:
         self.username = username
         self.password = password
         self.db_name = db_name
-        self._connection: Optional[Connection] = None
-        self._database: Optional[Database] = None
+        self._connection: Connection | None = None
+        self._database: Database | None = None
 
     def connect(self) -> Connection:
         """
@@ -58,12 +58,12 @@ class DatabaseManager:
                 self._connection = Connection(
                     arangoURL=f"http://{self.host}:{self.port}",
                     username=self.username,
-                    password=self.password
+                    password=self.password,
                 )
                 logger.info(f"Connected to ArangoDB at {self.host}:{self.port}")
             except Exception as e:
                 logger.error(f"Failed to connect to ArangoDB: {e}")
-                raise ConnectionError(f"ArangoDB connection failed: {e}")
+                raise ConnectionError(f"ArangoDB connection failed: {e}") from e
 
         return self._connection
 
@@ -86,22 +86,22 @@ class DatabaseManager:
                     try:
                         conn.createDatabase(name=self.db_name)
                         logger.info(f"Created database: {self.db_name}")
-                    except CreationError:
+                    except CreationError as e:
                         # If another worker just created it, it will exist now
                         if not conn.hasDatabase(self.db_name):
-                            raise Exception(f"Failed to create database: {self.db_name}")
+                            raise Exception(f"Failed to create database: {self.db_name}") from e
             except Exception as e:
                 logger.warning(f"Database access issue: {e}")
                 # Try to proceed if we can access the DB
                 if not conn.hasDatabase(self.db_name):
-                    raise Exception(f"Cannot access database: {self.db_name}")
+                    raise Exception(f"Cannot access database: {self.db_name}") from e
 
             self._database = conn[self.db_name]
             logger.info(f"Using database: {self.db_name}")
 
         return self._database
 
-    def get_connection_info(self) -> Dict[str, Any]:
+    def get_connection_info(self) -> dict[str, Any]:
         """
         Get connection and database information.
 
@@ -115,7 +115,7 @@ class DatabaseManager:
             "user": self.username,
             "status": "down",
             "version": None,
-            "collections": "unknown"
+            "collections": "unknown",
         }
 
         try:
@@ -144,7 +144,9 @@ class DatabaseManager:
 
         return info
 
-    def check_or_create_collection(self, collection_name: str, collection_type: str = 'Collection') -> Collection:
+    def check_or_create_collection(
+        self, collection_name: str, collection_type: str = "Collection"
+    ) -> Collection:
         """
         Get collection if exists, else create it safely under concurrency.
 
@@ -169,7 +171,7 @@ class DatabaseManager:
 
         return db[collection_name]
 
-    def get_collection(self, collection_name: str) -> Optional[Collection]:
+    def get_collection(self, collection_name: str) -> Collection | None:
         """
         Get a collection by name.
 
@@ -187,8 +189,9 @@ class DatabaseManager:
             logger.error(f"Failed to get collection {collection_name}: {e}")
         return None
 
-    def execute_aql_query(self, query: str, bind_vars: Optional[Dict[str, Any]] = None,
-                          raw_results: bool = False) -> Any:
+    def execute_aql_query(
+        self, query: str, bind_vars: dict[str, Any] | None = None, raw_results: bool = False
+    ) -> Any:
         """
         Execute an AQL query.
 
@@ -236,7 +239,7 @@ class DatabaseManager:
 
         return blacklist
 
-    def remove_duplicates(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def remove_duplicates(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Remove duplicate JSON objects by hashing.
 
@@ -278,10 +281,10 @@ class DatabaseManager:
             return False
 
     def insert_document_as_json(
-            self,
-            document_id: str,
-            file_json: Union[FileStorage, Dict[str, Any]],
-            blacklist_csv: str = "./app/static/data/blacklist.csv"
+        self,
+        document_id: str,
+        file_json: FileStorage | dict[str, Any],
+        blacklist_csv: str = "./app/static/data/blacklist.csv",
     ) -> bool:
         """
         Insert a JSON file into ArangoDB with document, software, and edge collections.
@@ -336,20 +339,22 @@ class DatabaseManager:
 
                     # Create edge from document to software
                     edge_doc_soft = doc_soft_edge.createEdge()
-                    edge_doc_soft['_from'] = document_document._id
-                    edge_doc_soft['_to'] = software_document._id
+                    edge_doc_soft["_from"] = document_document._id
+                    edge_doc_soft["_to"] = software_document._id
                     edge_doc_soft.save()
 
                     inserted_count += 1
 
-            logger.info(f"Inserted {inserted_count} software mentions for document with ID: {document_id}")
+            logger.info(
+                f"Inserted {inserted_count} software mentions for document with ID: {document_id}"
+            )
             return True
 
         except Exception as e:
             logger.error(f"Failed to insert JSON file: {e}")
             return False
 
-    def get_software_notifications(self, document_id: str) -> List[Dict[str, Any]]:
+    def get_software_notifications(self, document_id: str) -> list[dict[str, Any]]:
         """
         Get software notifications for a HAL document.
 
@@ -373,14 +378,18 @@ class DatabaseManager:
                         }
             """
 
-            result = self.execute_aql_query(query, bind_vars={'document_id': document_id}, raw_results=True)
+            result = self.execute_aql_query(
+                query, bind_vars={"document_id": document_id}, raw_results=True
+            )
             return list(result)
 
         except Exception as e:
             logger.error(f"Failed to get software notifications for {document_id}: {e}")
             return []
 
-    def update_software_with_author_validation(self, document_id: str, software_name: str, accepted: bool) -> bool:
+    def update_software_with_author_validation(
+        self, document_id: str, software_name: str, accepted: bool
+    ) -> bool:
         """
         Update software verification status.
 
@@ -405,19 +414,23 @@ class DatabaseManager:
             """
 
             bind_vars = {
-                'hal_id': document_id,
-                'software_name': software_name,
-                'verification': accepted
+                "hal_id": document_id,
+                "software_name": software_name,
+                "verification": accepted,
             }
 
             result = self.execute_aql_query(query, bind_vars=bind_vars, raw_results=True)
             updated_count = len(list(result))
 
             if updated_count > 0:
-                logger.info(f"Updated verification status for {updated_count} software entries "
-                            f"(HAL: {document_id}, Software: {software_name}, Status: {accepted})")
+                logger.info(
+                    f"Updated verification status for {updated_count} software entries "
+                    f"(HAL: {document_id}, Software: {software_name}, Status: {accepted})"
+                )
             else:
-                logger.warning(f"No software entries found for HAL: {document_id}, Software: {software_name}")
+                logger.warning(
+                    f"No software entries found for HAL: {document_id}, Software: {software_name}"
+                )
 
             return updated_count > 0
 
@@ -444,15 +457,13 @@ class DatabaseManager:
             logger.error(f"Failed to get collection count for {collection_name}: {e}")
             return 0
 
-    def get_document_by_key(self, collection_name: str, key: str) -> Optional[Dict[str, Any]]:
+    def get_document_by_key(self, collection_name: str, key: str) -> dict[str, Any] | None:
         """
         Fetch a single document by `_key` from a named collection.
         """
         try:
             query = f"FOR d IN {collection_name} FILTER d._key == @key RETURN d"
-            result = self.execute_aql_query(
-                query, bind_vars={'key': key}, raw_results=True
-            )
+            result = self.execute_aql_query(query, bind_vars={"key": key}, raw_results=True)
             docs = list(result)
             if docs:
                 return docs[0]
@@ -461,7 +472,7 @@ class DatabaseManager:
         return None
 
     def store_received_notification(
-        self, notification: Dict[str, Any], origin: Optional[str] = None
+        self, notification: dict[str, Any], origin: str | None = None
     ) -> None:
         """
         Persist an incoming COAR notification for later inspection via `/notifications`.
@@ -471,18 +482,20 @@ class DatabaseManager:
         """
         try:
             collection = self.check_or_create_collection("received_notifications")
-            doc = collection.createDocument({
-                "received_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                "origin": origin,
-                "payload": notification,
-            })
+            doc = collection.createDocument(
+                {
+                    "received_at": datetime.datetime.now(datetime.UTC).isoformat(),
+                    "origin": origin,
+                    "payload": notification,
+                }
+            )
             doc.save()
         except Exception as e:
             logger.error(f"Failed to persist received notification: {e}")
 
     def list_received_notifications(
-        self, limit: int = 100, origin: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        self, limit: int = 100, origin: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         Return the most recent received notifications, newest first.
 
@@ -492,11 +505,11 @@ class DatabaseManager:
         try:
             # Ensure collection exists so the query doesn't fail on a cold DB.
             self.check_or_create_collection("received_notifications")
-            bind_vars: Dict[str, Any] = {'limit': limit}
+            bind_vars: dict[str, Any] = {"limit": limit}
             origin_filter = ""
             if origin:
                 origin_filter = "FILTER n.origin == @origin"
-                bind_vars['origin'] = origin
+                bind_vars["origin"] = origin
             query = f"""
                 FOR n IN received_notifications
                     {origin_filter}
@@ -510,7 +523,7 @@ class DatabaseManager:
             logger.error(f"Failed to list received notifications: {e}")
             return []
 
-    def get_document_by_id(self, id: str) -> Optional[Dict[str, Any]]:
+    def get_document_by_id(self, id: str) -> dict[str, Any] | None:
         """
         Get a document by id with related softwares
 
@@ -535,16 +548,16 @@ class DatabaseManager:
                         mentions: mentions
                     }
             """
-            result = self.execute_aql_query(query, bind_vars={'id': id}, raw_results=True)
+            result = self.execute_aql_query(query, bind_vars={"id": id}, raw_results=True)
             docs = list(result)
             if docs:
                 return docs[0]
 
-        except Exception as e:
+        except Exception:
             logger.debug(f"Document not found: documents/{id}")
         return None
 
-    def delete_document_by_id(self, document_id: str) -> Optional[Dict[str, Any]]:
+    def delete_document_by_id(self, document_id: str) -> dict[str, Any] | None:
         """
         Delete a document and all its associated software mentions by file_hal_id.
 
@@ -593,12 +606,16 @@ class DatabaseManager:
                 }
             """
 
-            result = self.execute_aql_query(query, bind_vars={'document_id': document_id}, raw_results=True)
+            result = self.execute_aql_query(
+                query, bind_vars={"document_id": document_id}, raw_results=True
+            )
             deletion_result = list(result)
 
             if deletion_result:
                 software_count = deletion_result[0].get("software_deleted", 0)
-                logger.info(f"Successfully deleted document {document_id} and {software_count} software entries")
+                logger.info(
+                    f"Successfully deleted document {document_id} and {software_count} software entries"
+                )
                 return deletion_result[0]
             else:
                 logger.warning(f"No document found to delete with ID: {document_id}")
@@ -608,7 +625,7 @@ class DatabaseManager:
             logger.error(f"Failed to delete document {document_id}: {e}")
             return None
 
-    def get_software_by_normalized_name(self, name: str) -> List[Dict[str, Any]]:
+    def get_software_by_normalized_name(self, name: str) -> list[dict[str, Any]]:
         """
         Get software documents by normalized name.
 
@@ -625,14 +642,16 @@ class DatabaseManager:
                     RETURN soft
             """
 
-            result = self.execute_aql_query(query, bind_vars={'name': name}, raw_results=True)
+            result = self.execute_aql_query(query, bind_vars={"name": name}, raw_results=True)
             return list(result)
 
         except Exception as e:
             logger.error(f"Failed to get software by normalized name {name}: {e}")
             return []
 
-    def get_document_software(self, id_document: str, id_software: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_document_software(
+        self, id_document: str, id_software: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         Get software linked to a document.
 
@@ -656,8 +675,8 @@ class DatabaseManager:
                 """
                 result = self.execute_aql_query(
                     query,
-                    bind_vars={'id_document': id_document, 'software_id': id_software},
-                    raw_results=True
+                    bind_vars={"id_document": id_document, "software_id": id_software},
+                    raw_results=True,
                 )
             else:
                 query = """
@@ -668,7 +687,9 @@ class DatabaseManager:
                             LET software = DOCUMENT(edge_soft._to)
                             RETURN software
                 """
-                result = self.execute_aql_query(query, bind_vars={'id_document': id_document}, raw_results=True)
+                result = self.execute_aql_query(
+                    query, bind_vars={"id_document": id_document}, raw_results=True
+                )
 
             return list(result)
 
@@ -690,11 +711,11 @@ def init_db(app):
     global db_manager
 
     db_manager = DatabaseManager(
-        host=app.config['ARANGO_HOST'],
-        port=app.config['ARANGO_PORT'],
+        host=app.config["ARANGO_HOST"],
+        port=app.config["ARANGO_PORT"],
         username=app.config["ARANGO_USERNAME"],
         password=app.config["ARANGO_PASSWORD"],
-        db_name=app.config["ARANGO_DB"]
+        db_name=app.config["ARANGO_DB"],
     )
 
     # Initialize the database (creates if needed)
@@ -717,4 +738,3 @@ def get_db() -> DatabaseManager:
     if db_manager is None:
         raise RuntimeError("Database manager not initialized. Call init_db() first.")
     return db_manager
-

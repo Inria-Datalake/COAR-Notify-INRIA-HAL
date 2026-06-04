@@ -1,11 +1,15 @@
-import os
 import logging
+import os
 
+from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template
 from werkzeug.middleware.proxy_fix import ProxyFix
-from dotenv import load_dotenv
 
-from app.utils.db import init_db, get_db
+from app.routes.api_documents import api_documents_bp
+from app.routes.api_software import api_software_bp
+from app.routes.api_status import api_status_bp
+from app.routes.coar_inbox import coar_inbox_bp
+from app.utils.db import get_db, init_db
 
 load_dotenv()
 
@@ -26,11 +30,6 @@ app.config["SW_VIZ_URL"] = os.environ.get("SW_VIZ_URL", "")
 app.config["SW_VIZ_TOKEN"] = os.environ.get("SW_VIZ_TOKEN", "")
 
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
-
-from app.routes.api_documents import api_documents_bp
-from app.routes.api_software import api_software_bp
-from app.routes.api_status import api_status_bp
-from app.routes.coar_inbox import coar_inbox_bp
 
 app.register_blueprint(api_documents_bp)
 app.register_blueprint(api_software_bp)
@@ -78,35 +77,41 @@ def health():
         connection_info = db_manager.get_connection_info()
 
         if connection_info["status"] == "up":
-            return jsonify({
-                "status": "up",
+            return jsonify(
+                {
+                    "status": "up",
+                    "arango": {
+                        "host": connection_info["host"],
+                        "port": connection_info["port"],
+                        "db": connection_info["db"],
+                        "user": connection_info["user"],
+                        "version": connection_info["version"],
+                        "collections": connection_info["collections"],
+                    },
+                }
+            ), 200
+        return jsonify(
+            {
+                "status": "down",
+                "error": connection_info.get("error", "Unknown error"),
                 "arango": {
                     "host": connection_info["host"],
                     "port": connection_info["port"],
                     "db": connection_info["db"],
                     "user": connection_info["user"],
-                    "version": connection_info["version"],
-                    "collections": connection_info["collections"],
                 },
-            }), 200
-        return jsonify({
-            "status": "down",
-            "error": connection_info.get("error", "Unknown error"),
-            "arango": {
-                "host": connection_info["host"],
-                "port": connection_info["port"],
-                "db": connection_info["db"],
-                "user": connection_info["user"],
-            },
-        }), 503
+            }
+        ), 503
     except Exception as e:
-        return jsonify({
-            "status": "down",
-            "error": str(e),
-            "arango": {
-                "host": app.config.get("ARANGO_HOST", "unknown"),
-                "port": app.config.get("ARANGO_PORT", "unknown"),
-                "db": app.config.get("ARANGO_DB", "unknown"),
-                "user": app.config.get("ARANGO_USERNAME", "unknown"),
-            },
-        }), 503
+        return jsonify(
+            {
+                "status": "down",
+                "error": str(e),
+                "arango": {
+                    "host": app.config.get("ARANGO_HOST", "unknown"),
+                    "port": app.config.get("ARANGO_PORT", "unknown"),
+                    "db": app.config.get("ARANGO_DB", "unknown"),
+                    "user": app.config.get("ARANGO_USERNAME", "unknown"),
+                },
+            }
+        ), 503

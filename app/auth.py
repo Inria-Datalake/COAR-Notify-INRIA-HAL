@@ -2,7 +2,8 @@ import os
 import secrets
 from functools import wraps
 
-from flask import request, jsonify
+from flask import jsonify, request
+
 
 def _is_authorized(provided_key):
     """Return True only if `provided_key` is a valid API token.
@@ -29,4 +30,5 @@ def require_api_key(f):
         if not _is_authorized(request.headers.get("x-api-key")):
             return jsonify({"error": "Unauthorized Token"}), 401
         return f(*args, **kwargs)
+
     return decorated
