@@ -28,6 +28,7 @@ class RelationshipAnnounceNotifier:
         software_name,
         target_id,
         target_inbox,
+        mention_context_attributes=None,
         token=None,
     ):
         self.target_inbox = target_inbox
@@ -72,6 +73,12 @@ class RelationshipAnnounceNotifier:
                 "as:subject": software_name,
                 "id": uuid.uuid4().urn,
                 "type": "Relationship",
+                "mentionContextAttributes": mention_context_attributes
+                or {
+                    "created": False,
+                    "used": False,
+                    "shared": False,
+                },
             },
             "origin": {
                 "id": actor_id,

@@ -29,6 +29,10 @@ app.config["ARANGO_DB"] = os.environ.get("ARANGO_DB", "COAR_NOTIFY_DB")
 app.config["SW_VIZ_URL"] = os.environ.get("SW_VIZ_URL", "")
 app.config["SW_VIZ_TOKEN"] = os.environ.get("SW_VIZ_TOKEN", "")
 
+# Per-provider notification filter mode (e.g., "all", "created", "reused_and_shared")
+app.config["HAL_NOTIFICATION_FILTER"] = os.environ.get("HAL_NOTIFICATION_FILTER", "all")
+app.config["SWH_NOTIFICATION_FILTER"] = os.environ.get("SWH_NOTIFICATION_FILTER", "all")
+
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 app.register_blueprint(api_documents_bp)

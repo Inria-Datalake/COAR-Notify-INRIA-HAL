@@ -6,6 +6,7 @@ from typing import Any
 
 import requests
 from dotenv import load_dotenv
+from flask import current_app
 
 from app.classes.ActionReviewNotifier import ActionReviewNotifier
 from app.classes.RelationshipAnnounceNotifier import RelationshipAnnounceNotifier
@@ -32,6 +33,65 @@ class ProviderType(Enum):
     HAL = "hal"
     SOFTWARE_HERITAGE = "software_heritage"
     UNKNOWN = "unknown"
+
+
+class NotificationFilterMode(Enum):
+    """Filter modes restricting which software notifications get sent to a provider."""
+
+    ALL = "all"
+    CREATED = "created"
+    USED = "used"
+    SHARED = "shared"
+    REUSED = "reused"
+    REUSED_AND_SHARED = "reused_and_shared"
+    CREATED_NOT_SHARED = "created_not_shared"
+
+
+# Each predicate receives the three aggregated booleans from get_software_notifications
+# and returns True if the software should be sent for this mode.
+_FILTER_PREDICATES = {
+    NotificationFilterMode.ALL: lambda created, used, shared: True,
+    NotificationFilterMode.CREATED: lambda created, used, shared: created,
+    NotificationFilterMode.USED: lambda created, used, shared: used,
+    NotificationFilterMode.SHARED: lambda created, used, shared: shared,
+    NotificationFilterMode.REUSED: lambda created, used, shared: used and not created,
+    NotificationFilterMode.REUSED_AND_SHARED: lambda created, used, shared: (
+        used and shared and not created
+    ),
+    NotificationFilterMode.CREATED_NOT_SHARED: lambda created, used, shared: created and not shared,
+}
+
+
+def filter_notifications_by_mode(
+    notifications: list[dict[str, Any]], mode: str
+) -> list[dict[str, Any]]:
+    """
+    Filter a list of software notifications by mode.
+
+    Each notification dict is expected to carry boolean keys 'created', 'used', 'shared'
+    (added by get_software_notifications). Unknown modes log a warning and pass-through
+    so a typo in config never silently drops notifications.
+    """
+    try:
+        mode_enum = NotificationFilterMode(mode)
+    except ValueError:
+        logger.warning(
+            f"Unknown notification filter mode '{mode}', passing all notifications through"
+        )
+        return notifications
+
+    predicate = _FILTER_PREDICATES.get(mode_enum)
+    if predicate is None:
+        logger.warning(
+            f"No predicate registered for filter mode '{mode}', passing all notifications through"
+        )
+        return notifications
+
+    return [
+        n
+        for n in notifications
+        if predicate(bool(n.get("created")), bool(n.get("used")), bool(n.get("shared")))
+    ]
 
 
 class NotificationType(Enum):
@@ -246,6 +306,17 @@ def send_notifications_to_swh(document_id: str, notifications=None) -> dict[str,
             )
             return {"success_count": 0, "failure_count": 0, "total_count": 0}
 
+        filter_mode = current_app.config.get("SWH_NOTIFICATION_FILTER", "all")
+        before_count = len(notifications)
+        notifications = filter_notifications_by_mode(notifications, filter_mode)
+        skipped = before_count - len(notifications)
+        if skipped:
+            logger.info(
+                f"SWH filter '{filter_mode}' skipped {skipped} of {before_count} software notifications for {document_id}"
+            )
+        if not notifications:
+            return {"success_count": 0, "failure_count": 0, "total_count": 0}
+
         config = get_notification_config_for_provider(ProviderType.SOFTWARE_HERITAGE)
 
         success_count = 0
@@ -262,6 +333,11 @@ def send_notifications_to_swh(document_id: str, notifications=None) -> dict[str,
                     software_name=software_name,
                     target_id="https://www.softwareheritage.org",
                     target_inbox=config["inbox_url"],
+                    mention_context_attributes={
+                        "created": bool(notification.get("created")),
+                        "used": bool(notification.get("used")),
+                        "shared": bool(notification.get("shared")),
+                    },
                     token=config["token"],
                 )
                 response = notifier.send()
@@ -328,6 +404,17 @@ def send_notifications_to_hal(document_id: str, notifications=None) -> dict[str,
             )
             return {"success_count": 0, "failure_count": 0, "total_count": 0}
 
+        filter_mode = current_app.config.get("HAL_NOTIFICATION_FILTER", "all")
+        before_count = len(notifications)
+        notifications = filter_notifications_by_mode(notifications, filter_mode)
+        skipped = before_count - len(notifications)
+        if skipped:
+            logger.info(
+                f"HAL filter '{filter_mode}' skipped {skipped} of {before_count} software notifications for {document_id}"
+            )
+        if not notifications:
+            return {"success_count": 0, "failure_count": 0, "total_count": 0}
+
         config = get_notification_config_for_provider(ProviderType.HAL)
 
         success_count = 0
@@ -345,6 +432,11 @@ def send_notifications_to_hal(document_id: str, notifications=None) -> dict[str,
                     software_repo=None,
                     mention_type="software",
                     mention_context=notification.get("contexts", []),
+                    mention_context_attributes={
+                        "created": bool(notification.get("created")),
+                        "used": bool(notification.get("used")),
+                        "shared": bool(notification.get("shared")),
+                    },
                     target_id=config["base_url"],
                     target_inbox=config["inbox_url"],
                     token=config["token"],
@@ -408,7 +500,7 @@ def send_validation_to_viz(document_id: str, software_name: str, accepted: bool 
     headers = {"Content-Type": "application/json"}
 
     if config["token"]:
-        headers["Authorization"] = f'Bearer {config["token"]}'
+        headers["Authorization"] = f"Bearer {config['token']}"
 
     try:
         response = requests.post(url, headers=headers, timeout=5)
