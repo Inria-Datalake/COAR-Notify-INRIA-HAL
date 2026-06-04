@@ -42,6 +42,7 @@ def inject_app_version():
     """Make the application version available to every template as ``app_version``."""
     return {"app_version": __version__}
 
+
 app.register_blueprint(api_documents_bp)
 app.register_blueprint(api_software_bp)
 app.register_blueprint(api_status_bp)

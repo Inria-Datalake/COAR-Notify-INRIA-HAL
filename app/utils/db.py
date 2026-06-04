@@ -208,9 +208,7 @@ class DatabaseManager:
 
         for spec in self.COLLECTION_INDEXES.get(name, []):
             try:
-                collection.ensurePersistentIndex(
-                    spec["fields"], unique=spec.get("unique", False)
-                )
+                collection.ensurePersistentIndex(spec["fields"], unique=spec.get("unique", False))
                 logger.debug(
                     f"Ensured index on {name}.{'.'.join(spec['fields'])} "
                     f"(unique={spec.get('unique', False)})"
