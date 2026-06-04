@@ -131,10 +131,10 @@
     <div class="links">
       <h2>Endpoints</h2>
       <a href="{{ url_for('health') }}">Health Check (JSON)</a>
-      <a href="{{ url_for('software_status') }}">Software API Status</a>
-      <a href="{{ url_for('documents_status') }}">Documents API Status</a>
+      <a href="{{ url_for('api_software.software_status') }}">Software API Status</a>
+      <a href="{{ url_for('api_documents.documents_status') }}">Documents API Status</a>
       {% if status == 'up' %}
-        <a href="{{ url_for('show_notifications') }}">View Notifications</a>
+        <a href="{{ url_for('coar_inbox.show_notifications') }}">View Notifications</a>
       {% endif %}
     </div>
   </main>

@@ -27,8 +27,15 @@ app.config["SW_VIZ_TOKEN"] = os.environ.get("SW_VIZ_TOKEN", "")
 
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# Import routes after app creation to avoid circular imports
-from app.routes import api_software, api_documents, coar_inbox, api_status
+from app.routes.api_documents import api_documents_bp
+from app.routes.api_software import api_software_bp
+from app.routes.api_status import api_status_bp
+from app.routes.coar_inbox import coar_inbox_bp
+
+app.register_blueprint(api_documents_bp)
+app.register_blueprint(api_software_bp)
+app.register_blueprint(api_status_bp)
+app.register_blueprint(coar_inbox_bp)
 
 db_manager = init_db(app)
 

@@ -1,112 +1,103 @@
 import logging
-from app.app import app
-from flask import jsonify, request
+
+from flask import Blueprint, jsonify, request
 
 from app.auth import require_api_key
 from app.utils.db import get_db
-from app.utils.notification_handler import send_notifications_to_swh, send_notifications_to_hal, \
-    get_software_notifications
+from app.utils.notification_handler import (
+    get_software_notifications,
+    send_notifications_to_hal,
+    send_notifications_to_swh,
+)
 
 logger = logging.getLogger(__name__)
 
-@app.route('/api/documents', methods=['GET'])
+api_documents_bp = Blueprint("api_documents", __name__)
+
+
+@api_documents_bp.route("/api/documents", methods=["GET"])
 def documents_status():
     try:
         db_manager = get_db()
         total_count = db_manager.get_collection_count("documents")
-        status_info = {
+        return jsonify({
             "collection_name": "documents",
             "total_documents": total_count,
-        }
-        return jsonify(status_info)
+        })
     except Exception as e:
         logger.error(f"Failed to get documents status: {e}")
         return jsonify({"error": "Failed to retrieve documents status"}), 500
 
-@app.route('/api/document/<id>', methods=['GET'])
+
+@api_documents_bp.route("/api/document/<id>", methods=["GET"])
 def document_from_id(id):
     try:
         db_manager = get_db()
         doc = db_manager.get_document_by_id(id)
         if doc:
             return jsonify(doc)
-        else:
-            return jsonify({"error": "Document not found"}), 404
+        return jsonify({"error": "Document not found"}), 404
     except Exception as e:
         logger.error(f"Failed to get document {id}: {e}")
         return jsonify({"error": "Failed to retrieve document"}), 500
 
-@app.route('/api/document/<id>', methods=['DELETE'])
+
+@api_documents_bp.route("/api/document/<id>", methods=["DELETE"])
 @require_api_key
 def delete_document(id):
     """
     Delete a document and all its associated software mentions.
-
-    Args:
-        id: HAL document identifier (file_hal_id)
-
-    Returns:
-        JSON response with deletion status
     """
     try:
         db_manager = get_db()
 
-        # First check if document exists
-        doc_result = db_manager.get_document_by_id(id)
-        if not doc_result:
+        if not db_manager.get_document_by_id(id):
             return jsonify({"error": "Document not found"}), 404
 
-        # Delete the document using the database manager method
         deletion_result = db_manager.delete_document_by_id(id)
-
         if deletion_result:
             return jsonify({
                 "status": "deleted",
                 "document_id": id,
-                "software_deleted": deletion_result.get("software_deleted", 0)
+                "software_deleted": deletion_result.get("software_deleted", 0),
             })
-        else:
-            return jsonify({"error": "Failed to delete document"}), 500
-
+        return jsonify({"error": "Failed to delete document"}), 500
     except Exception as e:
         logger.error(f"Failed to delete document {id}: {e}")
         return jsonify({"error": "Failed to delete document"}), 500
 
-@app.route('/api/document/<id_document>/software', methods=['GET'])
+
+@api_documents_bp.route("/api/document/<id_document>/software", methods=["GET"])
 def document_software_all_from_id(id_document):
     try:
         db_manager = get_db()
-        result = db_manager.get_document_software(id_document)
-        return jsonify(result)
+        return jsonify(db_manager.get_document_software(id_document))
     except Exception as e:
         logger.error(f"Failed to get software for document {id_document}: {e}")
         return jsonify({"error": "Failed to retrieve document software"}), 500
 
-@app.route('/api/document/<id_document>/software/<id_software>', methods=['GET'])
+
+@api_documents_bp.route(
+    "/api/document/<id_document>/software/<id_software>", methods=["GET"]
+)
 def document_software_from_id(id_document, id_software):
     try:
         db_manager = get_db()
-        result = db_manager.get_document_software(id_document, id_software)
-        return jsonify(result)
+        return jsonify(db_manager.get_document_software(id_document, id_software))
     except Exception as e:
-        logger.error(f"Failed to get software {id_software} for document {id_document}: {e}")
+        logger.error(
+            f"Failed to get software {id_software} for document {id_document}: {e}"
+        )
         return jsonify({"error": "Failed to retrieve document software"}), 500
 
 
-@app.route("/api/document", methods=["POST"])
+@api_documents_bp.route("/api/document", methods=["POST"])
 @require_api_key
 def insert_new_document():
     """
-    Expects a JSON file of a document uploaded as form-data with key 'file' and a mandatory document_id parameter.
-    The document_id will be used as the HAL identifier instead of extracting from filename.
-
-    Form-data fields:
-    - file: JSON file containing software metadata (required)
-    - document_id: HAL identifier for the document (required)
-
-    Returns meaningful HTTP status codes.
+    Expects a JSON file uploaded as form-data with key 'file' and a mandatory document_id
+    field used as the HAL identifier for the document.
     """
-    # Validate required fields
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
@@ -118,68 +109,51 @@ def insert_new_document():
 
     try:
         db_manager = get_db()
-        # Override the filename with the provided document_id for HAL identification
-        original_filename = file.filename
-        inserted = db_manager.insert_document_as_json(document_id, file)  # returns True if inserted, False if duplicate
-
-
+        inserted = db_manager.insert_document_as_json(document_id, file)
     except Exception as e:
         logger.error(f"File insertion failed: {e}")
         return jsonify({"error": f"Insertion failed: {str(e)}"}), 500
 
-    if inserted:
-        notifications = get_software_notifications(document_id)
-
-        notification_results = {}
-        try:
-            hal_result = send_notifications_to_hal(document_id, notifications)
-            notification_results["hal"] = {
-                "sent": hal_result["success_count"],
-                "failed": hal_result["failure_count"]
-            }
-        except Exception as e:
-            logger.error(f"HAL notification failed for {document_id}: {e}")
-            notification_results["hal"] = {
-                "sent": 0,
-                "failed": len(notifications) if notifications else 0,
-                "error": str(e)
-            }
-
-        try:
-            swh_result = send_notifications_to_swh(document_id, notifications)
-            notification_results["swh"] = {
-                "sent": swh_result["success_count"],
-                "failed": swh_result["failure_count"]
-            }
-        except Exception as e:
-            logger.error(f"SWH notification failed for {document_id}: {e}")
-            notification_results["swh"] = {
-                "sent": 0,
-                "failed": len(notifications) if notifications else 0,
-                "error": str(e)
-            }
-
-        total_sent = sum(result.get("sent", 0) for result in notification_results.values())
-        total_failed = sum(result.get("failed", 0) for result in notification_results.values())
-
-        return jsonify({
-            "status": "inserted",
-            "file": original_filename,
-            "document_id": document_id,
-            "notifications": {
-                "summary": {
-                    "total_sent": total_sent,
-                    "total_failed": total_failed,
-                    "total_attempts": total_sent + total_failed
-                },
-                "by_provider": notification_results
-            }
-        }), 201
-    else:
-        # Document already exists
+    if not inserted:
         return jsonify({
             "status": "exists",
             "message": "Document already exists in the database",
             "document_id": document_id,
-            "file": original_filename
         }), 409
+
+    notifications = get_software_notifications(document_id)
+    notification_results = {}
+
+    for provider, sender in (
+        ("hal", send_notifications_to_hal),
+        ("swh", send_notifications_to_swh),
+    ):
+        try:
+            result = sender(document_id, notifications)
+            notification_results[provider] = {
+                "sent": result["success_count"],
+                "failed": result["failure_count"],
+            }
+        except Exception as e:
+            logger.error(f"{provider.upper()} notification failed for {document_id}: {e}")
+            notification_results[provider] = {
+                "sent": 0,
+                "failed": len(notifications) if notifications else 0,
+                "error": str(e),
+            }
+
+    total_sent = sum(r.get("sent", 0) for r in notification_results.values())
+    total_failed = sum(r.get("failed", 0) for r in notification_results.values())
+
+    return jsonify({
+        "status": "inserted",
+        "document_id": document_id,
+        "notifications": {
+            "summary": {
+                "total_sent": total_sent,
+                "total_failed": total_failed,
+                "total_attempts": total_sent + total_failed,
+            },
+            "by_provider": notification_results,
+        },
+    }), 201
