@@ -1,4 +1,5 @@
 import os
+import secrets
 from functools import wraps
 
 from flask import request, jsonify
@@ -24,8 +25,13 @@ def _is_authorized(provided_key):
       - reject every request when API_TOKEN is unset/empty, and
       - reject when provided_key is missing or doesn't match API_TOKEN.
     """
-    # TODO(you): implement the fail-closed authorization check.
-    raise NotImplementedError
+    # Fail closed: an unconfigured server (no/empty API_TOKEN) rejects everything,
+    # and a request without an x-api-key header (provided_key is None) is rejected
+    # before any comparison.
+    if not API_TOKEN or not provided_key:
+        return False
+    # Constant-time comparison to avoid leaking the token via timing differences.
+    return secrets.compare_digest(provided_key, API_TOKEN)
 
 
 def require_api_key(f):
