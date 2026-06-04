@@ -167,6 +167,7 @@ Each attribute has:
   "_key": "auto-generated",
   "_id": "received_notifications/123456",
   "received_at": "2026-04-16T07:30:00.000000Z",
+  "origin": "swh",
   "payload": { "...": "raw COAR JSON-LD as received" }
 }
 ```
@@ -178,6 +179,7 @@ Each attribute has:
 | `_key` | string | Auto-generated unique identifier | Yes |
 | `_id` | string | Auto-generated document ID | Yes |
 | `received_at` | string | ISO-8601 UTC timestamp (`Z` suffix) of arrival | Yes |
+| `origin` | string \| null | Derived sender classification: `swh`, `hal`, or `unknown` | No |
 | `payload` | object | The raw notification body as received | Yes |
 
 #### Access
@@ -327,9 +329,22 @@ See [API Documentation](../README.md#api-documentation) in the main README for t
 ## Performance Considerations
 
 ### Indexes
-- Unique index on `documents.file_hal_id` prevents duplicates
-- Hash index on `software.software_name.normalizedForm` enables fast lookups
-- Persistent index on `software.verification_by_author` filters verified content
+
+The following persistent indexes are created automatically in code, the first
+time each collection is accessed, by `DatabaseManager._ensure_indexes` (driven
+by the `COLLECTION_INDEXES` registry in `app/utils/db.py`). Creation is
+idempotent, so it is safe across restarts and concurrent workers.
+
+| Collection | Field(s) | Type | Purpose |
+|------------|----------|------|---------|
+| `documents` | `file_hal_id` | persistent, **unique** | Prevents duplicate HAL documents at the DB level (in addition to the app-level `document_exists` check) and speeds up lookups by HAL id |
+| `received_notifications` | `origin` | persistent | Speeds up filtering notifications by origin (`swh` / `hal` / `unknown`) |
+| `received_notifications` | `received_at` | persistent | Speeds up the newest-first (`SORT ... DESC`) listing |
+
+> **Not yet indexed in code:** lookups on `software.software_name.normalizedForm`
+> and filtering on `software.verification_by_author` would benefit from indexes,
+> but these are not currently created automatically. Add entries to
+> `COLLECTION_INDEXES` if/when these access patterns need optimizing.
 
 ### Deduplication
 - Automatic removal of duplicate software mentions within documents
