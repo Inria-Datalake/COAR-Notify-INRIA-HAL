@@ -65,10 +65,8 @@ For detailed database schema information, see the [Database Schema Documentation
 
 ## Configuration
 
-- The app loads `config.json` and then applies environment overrides. In containers (Compose), env variables take
-  precedence.
-- Inside Docker Compose networks, containers must use service names to talk to each other (e.g.,
-  `ARANGO_HOST=arangodb`), not `localhost`.
+- The app reads all configuration from environment variables, loaded from a `.env` file via `python-dotenv` (see `.env.example`). In containers (Compose), env variables provided by the orchestrator take precedence.
+- Inside Docker Compose networks, containers must use service names to talk to each other (e.g., `ARANGO_HOST=arangodb`), not `localhost`.
 - Defaults now match Compose so it works out-of-the-box in containers:
     - `ARANGO_HOST=arangodb`
     - `ARANGO_PORT=8529`
@@ -162,7 +160,24 @@ see [Database Schema Documentation](docs/database.md).
 
 ### Authentication
 
-Some endpoints require an API key via the `x-api-key` header. The key is read from `auth_admin.json` (`TOKEN`).
+Some endpoints require an API token sent via the `x-api-key` header. The token is configured through the
+`API_TOKEN` environment variable (loaded from `.env`, like all other configuration — see `.env.example`).
+
+Set it before running the app:
+
+```sh
+# in your .env
+API_TOKEN=<your-strong-token>
+```
+
+Generate a strong value with:
+
+```sh
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Clients then send that value in the `x-api-key` header. Requests with a missing or incorrect token receive
+`401 Unauthorized`.
 
 Example header:
 
@@ -592,7 +607,7 @@ services:
 ### System Requirements
 
 - Docker and Docker Compose
-- Python 3.9+ (for local development)
+- Python 3.11+ (for local development)
 - ArangoDB instance
 
 ### Local Development Setup
