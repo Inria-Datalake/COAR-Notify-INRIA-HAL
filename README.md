@@ -157,6 +157,8 @@ see [Database Schema Documentation](docs/database.md).
 | GET                      | `/inbox`                               | No            | Get inbox API documentation              |
 | POST                     | `/inbox`                               | No            | Receive COAR notification                |
 | GET                      | `/notifications`                       | No            | View received notifications (HTML)       |
+| GET                      | `/api/notifications`                   | Yes           | List received notifications (JSON)       |
+| GET                      | `/api/notifications/<key>`             | Yes           | Get a received notification by key (JSON)|
 
 ### Authentication
 
@@ -433,12 +435,34 @@ The COAR Notify inbox handles bidirectional communication for software mention v
     - Supported types: `Accept`, `Reject`
     - Returns 202 with notification processing summary
     - Automatically updates verification status in database
+    - **Every** received notification is persisted to the `received_notifications`
+      collection (with a `received_at` timestamp and a classified `origin` of
+      `swh`, `hal`, or `unknown`), including those that are ignored.
+    - Notifications originating from Software Heritage are stored but **not
+      dispatched** (returned with `"status": "ignored"`), to avoid notification
+      loops.
 
 #### View Received Notifications
 
 - **GET `/notifications`**
     - Renders an HTML page displaying all received notifications
     - Useful for debugging and inspection during development
+
+#### List Received Notifications (JSON)
+
+- **GET `/api/notifications`** — requires `x-api-key`
+    - Returns recent received notifications as JSON, newest first
+    - Query params:
+        - `limit` — max records to return (1–1000, default 100)
+        - `origin` — optional filter, `swh` or `hal` (any other value → 400)
+    - Response: `{ "count": <n>, "origin": <filter|null>, "notifications": [ ... ] }`
+    - Each record: `{ "_key", "received_at", "origin", "payload": { ...verbatim notification... } }`
+
+#### Get a Received Notification by Key (JSON)
+
+- **GET `/api/notifications/<key>`** — requires `x-api-key`
+    - `<key>` is the `_key` returned by the list endpoint
+    - Returns the single record, or 404 if not found
 
 Examples:
 
@@ -472,6 +496,18 @@ curl -s -X POST \
 
 # View notifications in browser
 # http://localhost:5000/notifications
+
+# List received notifications as JSON (requires API key)
+curl -s -H "x-api-key: $API_TOKEN" \
+  "http://localhost:5000/api/notifications?limit=20" | jq
+
+# Only Software Heritage notifications
+curl -s -H "x-api-key: $API_TOKEN" \
+  "http://localhost:5000/api/notifications?origin=swh" | jq
+
+# Fetch a single notification by its storage key
+curl -s -H "x-api-key: $API_TOKEN" \
+  http://localhost:5000/api/notifications/106031488 | jq
 ```
 
 **Supported Notification Types:**

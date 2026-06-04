@@ -460,34 +460,51 @@ class DatabaseManager:
             logger.error(f"Failed to get document by key {collection_name}/{key}: {e}")
         return None
 
-    def store_received_notification(self, notification: Dict[str, Any]) -> None:
+    def store_received_notification(
+        self, notification: Dict[str, Any], origin: Optional[str] = None
+    ) -> None:
         """
         Persist an incoming COAR notification for later inspection via `/notifications`.
+
+        `origin` is our derived classification of the sender (e.g. "swh", "hal",
+        "unknown"), stored alongside the verbatim payload so it can be filtered on.
         """
         try:
             collection = self.check_or_create_collection("received_notifications")
             doc = collection.createDocument({
-                "received_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "received_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "origin": origin,
                 "payload": notification,
             })
             doc.save()
         except Exception as e:
             logger.error(f"Failed to persist received notification: {e}")
 
-    def list_received_notifications(self, limit: int = 100) -> List[Dict[str, Any]]:
+    def list_received_notifications(
+        self, limit: int = 100, origin: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """
         Return the most recent received notifications, newest first.
+
+        If `origin` is given, only notifications classified with that origin
+        (e.g. "swh" or "hal") are returned.
         """
         try:
             # Ensure collection exists so the query doesn't fail on a cold DB.
             self.check_or_create_collection("received_notifications")
-            query = """
+            bind_vars: Dict[str, Any] = {'limit': limit}
+            origin_filter = ""
+            if origin:
+                origin_filter = "FILTER n.origin == @origin"
+                bind_vars['origin'] = origin
+            query = f"""
                 FOR n IN received_notifications
+                    {origin_filter}
                     SORT n.received_at DESC
                     LIMIT @limit
                     RETURN n
             """
-            result = self.execute_aql_query(query, bind_vars={'limit': limit}, raw_results=True)
+            result = self.execute_aql_query(query, bind_vars=bind_vars, raw_results=True)
             return list(result)
         except Exception as e:
             logger.error(f"Failed to list received notifications: {e}")
