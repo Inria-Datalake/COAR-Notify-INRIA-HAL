@@ -26,8 +26,18 @@ KNOWN_ORIGINS = (ORIGIN_SWH, ORIGIN_HAL)
 
 
 def _origin_id(notification: dict) -> str:
+    """Extract the origin's `id`, tolerating both COAR shapes.
+
+    Per the COAR Notify spec `origin` is an object (``{"id": ...}``), but some
+    senders put a bare URL string there instead. Handle both so a malformed
+    payload classifies as "unknown" rather than crashing the inbox.
+    """
     origin = notification.get("origin") or {}
-    return (origin.get("id") or "").rstrip("/")
+    if isinstance(origin, str):
+        return origin.rstrip("/")
+    if isinstance(origin, dict):
+        return (origin.get("id") or "").rstrip("/")
+    return ""
 
 
 def _classify_origin(notification: dict) -> str:
