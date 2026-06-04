@@ -2,16 +2,61 @@
 <html>
 <head>
     <title>Received Notifications</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 2rem; }
+        .filters { margin-bottom: 1.5rem; }
+        .filters .group { margin-bottom: .5rem; }
+        .filters .label { font-weight: bold; margin-right: .5rem; }
+        .filters a {
+            display: inline-block; padding: .15rem .6rem; margin: 0 .25rem .25rem 0;
+            border: 1px solid #ccc; border-radius: 1rem; text-decoration: none;
+            color: #333; font-size: .85rem;
+        }
+        .filters a.active { background: #2a6; color: #fff; border-color: #2a6; }
+        .count { color: #666; font-size: .9rem; margin-bottom: 1rem; }
+        ul { list-style: none; padding: 0; }
+        li { border: 1px solid #eee; border-radius: .5rem; padding: 1rem; margin-bottom: 1rem; }
+        pre { background: #f7f7f7; padding: .75rem; border-radius: .25rem; overflow-x: auto; }
+    </style>
 </head>
 <body>
     <h1>Received COAR Notifications</h1>
+
+    <div class="filters">
+        <div class="group">
+            <span class="label">Origin:</span>
+            <a href="{{ url_for('coar_inbox.show_notifications', type=selected_type) }}"
+               class="{{ 'active' if not selected_origin }}">All</a>
+            {% for o in origins %}
+                <a href="{{ url_for('coar_inbox.show_notifications', origin=o, type=selected_type) }}"
+                   class="{{ 'active' if selected_origin == o }}">{{ o }}</a>
+            {% endfor %}
+        </div>
+        <div class="group">
+            <span class="label">Type:</span>
+            <a href="{{ url_for('coar_inbox.show_notifications', origin=selected_origin) }}"
+               class="{{ 'active' if not selected_type }}">All</a>
+            {% for t in types %}
+                <a href="{{ url_for('coar_inbox.show_notifications', origin=selected_origin, type=t) }}"
+                   class="{{ 'active' if selected_type == t }}">{{ t }}</a>
+            {% endfor %}
+        </div>
+    </div>
+
+    <p class="count">
+        {{ records | length }} notification{{ '' if records | length == 1 else 's' }}
+        {% if selected_origin %}from <strong>{{ selected_origin }}</strong>{% endif %}
+        {% if selected_type %}of type <strong>{{ selected_type }}</strong>{% endif %}
+    </p>
+
     {% if not records %}
-        <p><em>No notifications received yet.</em></p>
+        <p><em>No notifications match the current filter.</em></p>
     {% endif %}
     <ul>
         {% for record in records %}
             <li>
                 <strong>Received at:</strong> {{ record.received_at }}<br>
+                <strong>Origin:</strong> {{ record.origin or 'N/A' }}<br>
                 <strong>Type:</strong> {{ record.payload.type }}<br>
                 <strong>Actor:</strong> {{ record.payload.actor.id if record.payload.actor else 'N/A' }}<br>
                 <pre>{{ record.payload | tojson(indent=2) }}</pre>

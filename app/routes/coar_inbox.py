@@ -26,8 +26,18 @@ KNOWN_ORIGINS = (ORIGIN_SWH, ORIGIN_HAL)
 
 
 def _origin_id(notification: dict) -> str:
+    """Extract the origin's `id`, tolerating both COAR shapes.
+
+    Per the COAR Notify spec `origin` is an object (``{"id": ...}``), but some
+    senders put a bare URL string there instead. Handle both so a malformed
+    payload classifies as "unknown" rather than crashing the inbox.
+    """
     origin = notification.get("origin") or {}
-    return (origin.get("id") or "").rstrip("/")
+    if isinstance(origin, str):
+        return origin.rstrip("/")
+    if isinstance(origin, dict):
+        return (origin.get("id") or "").rstrip("/")
+    return ""
 
 
 def _classify_origin(notification: dict) -> str:
@@ -179,13 +189,41 @@ def inbox_description():
     )
 
 
+# Origins the /notifications page can filter on. Broader than the API's
+# KNOWN_ORIGINS because the page also lets you inspect "unknown"-tagged records.
+PAGE_ORIGINS = (ORIGIN_SWH, ORIGIN_HAL, ORIGIN_UNKNOWN)
+
+
 @coar_inbox_bp.route("/notifications", methods=["GET"])
 def show_notifications():
     """
-    Display all received notifications from the ArangoDB-backed store.
+    Display received notifications from the ArangoDB-backed store, with optional
+    server-side filtering by origin (?origin=swh|hal|unknown) and COAR type
+    (?type=Accept|Reject|...). Invalid filter values are ignored rather than
+    erroring, so a stale bookmark just shows everything.
     """
-    records = get_db().list_received_notifications(limit=200)
-    return render_template("notifications.html", records=records)
+    db = get_db()
+
+    origin = (request.args.get("origin") or "").lower() or None
+    if origin not in PAGE_ORIGINS:
+        origin = None
+
+    available_types = db.distinct_received_notification_types()
+    notification_type = request.args.get("type") or None
+    if notification_type not in available_types:
+        notification_type = None
+
+    records = db.list_received_notifications(
+        limit=200, origin=origin, notification_type=notification_type
+    )
+    return render_template(
+        "notifications.html",
+        records=records,
+        origins=PAGE_ORIGINS,
+        types=available_types,
+        selected_origin=origin,
+        selected_type=notification_type,
+    )
 
 
 @coar_inbox_bp.route("/api/notifications", methods=["GET"])
@@ -197,6 +235,7 @@ def api_list_notifications():
     Query params:
         limit: maximum number of records to return (1-1000, default 100).
         origin: optional filter, one of "swh" or "hal".
+        type: optional COAR type filter, e.g. "Accept" or "Reject".
     """
     limit = request.args.get("limit", default=100, type=int) or 100
     limit = max(1, min(limit, 1000))
@@ -211,9 +250,20 @@ def api_list_notifications():
                 }
             ), 400
 
+    notification_type = request.args.get("type") or None
+
     try:
-        records = get_db().list_received_notifications(limit=limit, origin=origin)
-        return jsonify({"count": len(records), "origin": origin, "notifications": records})
+        records = get_db().list_received_notifications(
+            limit=limit, origin=origin, notification_type=notification_type
+        )
+        return jsonify(
+            {
+                "count": len(records),
+                "origin": origin,
+                "type": notification_type,
+                "notifications": records,
+            }
+        )
     except Exception as e:
         logger.error(f"Failed to list notifications: {e}")
         return jsonify({"error": "Failed to retrieve notifications"}), 500
