@@ -71,7 +71,8 @@ class ActionReviewNotifier:
                 },
                 "mentionType": mention_type,
                 "mentionContext": mention_context,
-                "mentionContextAttributes": mention_context_attributes or {
+                "mentionContextAttributes": mention_context_attributes
+                or {
                     "created": False,
                     "used": False,
                     "shared": False,
