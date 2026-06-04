@@ -497,25 +497,40 @@ class DatabaseManager:
             logger.error(f"Failed to persist received notification: {e}")
 
     def list_received_notifications(
-        self, limit: int = 100, origin: str | None = None
+        self,
+        limit: int = 100,
+        origin: str | None = None,
+        notification_type: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Return the most recent received notifications, newest first.
 
         If `origin` is given, only notifications classified with that origin
-        (e.g. "swh" or "hal") are returned.
+        (e.g. "swh" or "hal") are returned. If `notification_type` is given,
+        only notifications whose COAR `type` matches are returned; the payload's
+        `type` may be a single string or an array, so both shapes are handled.
         """
         try:
             # Ensure collection exists so the query doesn't fail on a cold DB.
             self.check_or_create_collection("received_notifications")
             bind_vars: dict[str, Any] = {"limit": limit}
-            origin_filter = ""
+            filters = []
             if origin:
-                origin_filter = "FILTER n.origin == @origin"
+                filters.append("FILTER n.origin == @origin")
                 bind_vars["origin"] = origin
+            if notification_type:
+                # `payload.type` is polymorphic in JSON-LD: a bare string or an
+                # array of strings. Branch on IS_ARRAY so neither shape is missed.
+                filters.append(
+                    "FILTER (IS_ARRAY(n.payload.type) "
+                    "? @ntype IN n.payload.type "
+                    ": n.payload.type == @ntype)"
+                )
+                bind_vars["ntype"] = notification_type
+            filter_clause = "\n                    ".join(filters)
             query = f"""
                 FOR n IN received_notifications
-                    {origin_filter}
+                    {filter_clause}
                     SORT n.received_at DESC
                     LIMIT @limit
                     RETURN n
@@ -524,6 +539,28 @@ class DatabaseManager:
             return list(result)
         except Exception as e:
             logger.error(f"Failed to list received notifications: {e}")
+            return []
+
+    def distinct_received_notification_types(self) -> list[str]:
+        """
+        Return the distinct COAR notification `type` values seen so far, sorted.
+
+        Used to build the type filter UI. Flattens array-shaped `type` values so
+        each individual type appears once regardless of how it was stored.
+        """
+        try:
+            self.check_or_create_collection("received_notifications")
+            query = """
+                FOR n IN received_notifications
+                    LET types = IS_ARRAY(n.payload.type) ? n.payload.type : [n.payload.type]
+                    FOR t IN types
+                        FILTER t != null
+                        SORT t
+                        RETURN DISTINCT t
+            """
+            return list(self.execute_aql_query(query, raw_results=True))
+        except Exception as e:
+            logger.error(f"Failed to list distinct notification types: {e}")
             return []
 
     def get_document_by_id(self, id: str) -> dict[str, Any] | None:
