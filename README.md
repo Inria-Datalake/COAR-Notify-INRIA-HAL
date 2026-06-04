@@ -668,3 +668,54 @@ services:
 4. **Access services**:
     - Flask app: http://localhost:5000
     - ArangoDB UI: http://localhost:8529
+
+### Code Quality
+
+Development tools are pinned in `requirements-dev.txt` (`ruff`, `mypy`,
+`bump-my-version`); install them with:
+
+```sh
+pip install -r requirements-dev.txt
+```
+
+Linting and formatting use [Ruff](https://docs.astral.sh/ruff/). The CI build
+**fails** if either check reports a problem, so run them before pushing:
+
+```sh
+# Check lint and formatting (these are the exact steps CI runs)
+ruff check app run.py
+ruff format --check app run.py
+
+# Auto-fix lint findings and reformat in place
+ruff check --fix app run.py
+ruff format app run.py
+```
+
+Install the pinned Ruff version from `requirements-dev.txt` — a newer Ruff may
+report different issues than CI and make your local results disagree with the
+pipeline.
+
+Type checking is relaxed for now and runs **non-blocking** in CI:
+
+```sh
+mypy app
+```
+
+### Releasing
+
+Releases are cut manually with `bump-my-version`; CI handles the rest on tag push.
+
+1. Ensure `main` is green and your working tree is clean.
+2. Bump the version — this updates `pyproject.toml`, commits, and creates a
+   `vX.Y.Z` tag:
+   ```sh
+   bump-my-version bump [patch|minor|major]
+   ```
+3. Push the commit and the tag:
+   ```sh
+   git push && git push --tags
+   ```
+
+On the tag push, CI builds and publishes the Docker image
+`lfoppiano/coar-notify-inria-hal:vX.Y.Z` and creates a GitHub Release with
+auto-generated notes from the commits since the previous tag.

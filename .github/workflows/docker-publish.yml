@@ -28,9 +28,14 @@ jobs:
           pip install -r requirements.txt
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
 
-      - name: Lint (flake8)
+      - name: Lint (ruff)
         run: |
-          flake8 app sandbox || true
+          ruff check app run.py
+          ruff format --check app run.py
+
+      - name: Type check (mypy)
+        run: |
+          mypy app || true
 
       - name: Syntax check (compileall)
         run: |
@@ -58,6 +63,7 @@ jobs:
             type=ref,event=branch
             type=ref,event=tag
             type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
         uses: docker/build-push-action@v6
