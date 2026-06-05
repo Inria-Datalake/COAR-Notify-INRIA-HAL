@@ -364,8 +364,15 @@ class DatabaseManager:
                 logger.warning(f"Document with ID '{document_id}' already exists in DB. Skipping.")
                 return False
 
+            # Timestamp ingestion so documents/software can be charted over time
+            # (see get_activity_timeseries). Stored as an ISO-8601 UTC string,
+            # matching received_notifications.received_at.
+            now_iso = datetime.datetime.now(datetime.UTC).isoformat()
+
             # Insert main document
-            document_document = documents_collection.createDocument({"file_hal_id": document_id})
+            document_document = documents_collection.createDocument(
+                {"file_hal_id": document_id, "created_at": now_iso}
+            )
             document_document.save()
             logger.debug(f"Created document with ID: {document_id}")
 
@@ -381,6 +388,7 @@ class DatabaseManager:
                     mention["software_type"] = mention.pop("software-type")
 
                     # Insert software document
+                    mention["created_at"] = now_iso
                     software_document = software_collection.createDocument(mention)
                     software_document.save()
 
@@ -522,8 +530,8 @@ class DatabaseManager:
             "software_count": 0,
             "distinct_software_count": 0,
             "notifications_count": 0,
+            # origin -> {"total": n, "accepted": a, "rejected": r}
             "notifications_by_origin": {},
-            "notifications_by_type": {},
         }
 
         # Simple totals via server-side AQL LENGTH(). We deliberately avoid
@@ -559,43 +567,119 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to count distinct software: {e}")
 
-        # Notifications grouped by our derived origin (swh / hal / unknown).
-        try:
-            result = self.execute_aql_query(
-                """
-                FOR n IN received_notifications
-                    COLLECT o = n.origin WITH COUNT INTO c
-                    RETURN {origin: o, count: c}
-                """,
-                raw_results=True,
-            )
-            stats["notifications_by_origin"] = {
-                (row["origin"] or "unknown"): row["count"] for row in result
-            }
-        except Exception as e:
-            logger.error(f"Failed to count notifications by origin: {e}")
-
-        # Notifications grouped by COAR type. `payload.type` is polymorphic
-        # (string or array), so flatten via IS_ARRAY just like
-        # distinct_received_notification_types does.
+        # Notifications grouped by our derived origin (swh / hal / unknown),
+        # with the accepted/rejected split per origin. `payload.type` is
+        # polymorphic (string or array), handled via IS_ARRAY; COLLECT ... INTO
+        # group = ts gathers each notification's type list so we can count the
+        # ones containing Accept / Reject within each origin.
         try:
             result = self.execute_aql_query(
                 """
                 FOR n IN received_notifications
                     LET ts = IS_ARRAY(n.payload.type) ? n.payload.type : [n.payload.type]
-                    FOR t IN ts
-                        FILTER t != null
-                        COLLECT type = t WITH COUNT INTO c
-                        SORT type
-                        RETURN {type: type, count: c}
+                    COLLECT o = n.origin INTO group = ts
+                    RETURN {
+                        origin: o,
+                        total: LENGTH(group),
+                        accepted: LENGTH(group[* FILTER "Accept" IN CURRENT]),
+                        rejected: LENGTH(group[* FILTER "Reject" IN CURRENT])
+                    }
                 """,
                 raw_results=True,
             )
-            stats["notifications_by_type"] = {row["type"]: row["count"] for row in result}
+            stats["notifications_by_origin"] = {
+                (row["origin"] or "unknown"): {
+                    "total": row["total"],
+                    "accepted": row["accepted"],
+                    "rejected": row["rejected"],
+                }
+                for row in result
+            }
         except Exception as e:
-            logger.error(f"Failed to count notifications by type: {e}")
+            logger.error(f"Failed to count notifications by origin: {e}")
 
         return stats
+
+    def get_activity_timeseries(self, days: int = 30) -> dict[str, Any]:
+        """
+        Daily activity counts for the last ``days`` days (default 30).
+
+        Returns a dict with a ``labels`` list (one ``YYYY-MM-DD`` per day, oldest
+        first) and five equal-length series suitable for plotting:
+        ``documents`` and ``software`` (by ingestion ``created_at``), and
+        ``notifications`` / ``accepted`` / ``rejected`` (by ``received_at``).
+        Days with no activity are zero-filled so the axis is continuous, like
+        coar-viz's 30-day charts.
+
+        Documents/software only gained a ``created_at`` from this version on, so
+        rows ingested earlier are simply absent from the window. Each query is
+        guarded independently; a failure yields a zero series rather than raising.
+        """
+        # Continuous date axis in Python (today back to days-1 ago).
+        today = datetime.datetime.now(datetime.UTC).date()
+        axis = [today - datetime.timedelta(days=i) for i in range(days - 1, -1, -1)]
+        labels = [d.isoformat() for d in axis]
+        index = {label: i for i, label in enumerate(labels)}
+        since = axis[0].isoformat()  # ISO dates compare lexicographically.
+
+        result: dict[str, Any] = {
+            "labels": labels,
+            "documents": [0] * days,
+            "software": [0] * days,
+            "notifications": [0] * days,
+            "accepted": [0] * days,
+            "rejected": [0] * days,
+        }
+
+        # Documents and software, grouped by their ingestion date (created_at).
+        for series_key, collection_name in (("documents", "documents"), ("software", "software")):
+            try:
+                rows = self.execute_aql_query(
+                    f"""
+                    FOR d IN {collection_name}
+                        FILTER d.created_at != null
+                            AND SUBSTRING(d.created_at, 0, 10) >= @since
+                        COLLECT day = SUBSTRING(d.created_at, 0, 10) WITH COUNT INTO c
+                        RETURN {{day: day, count: c}}
+                    """,
+                    bind_vars={"since": since},
+                    raw_results=True,
+                )
+                for row in rows:
+                    i = index.get(row["day"])
+                    if i is not None:
+                        result[series_key][i] = row["count"]
+            except Exception as e:
+                logger.error(f"Failed to build {collection_name} timeseries: {e}")
+
+        # Notifications received, with the accepted/rejected split, by received_at.
+        try:
+            rows = self.execute_aql_query(
+                """
+                FOR n IN received_notifications
+                    FILTER SUBSTRING(n.received_at, 0, 10) >= @since
+                    LET ts = IS_ARRAY(n.payload.type) ? n.payload.type : [n.payload.type]
+                    COLLECT day = SUBSTRING(n.received_at, 0, 10) INTO group = ts
+                    RETURN {
+                        day: day,
+                        total: LENGTH(group),
+                        accepted: LENGTH(group[* FILTER "Accept" IN CURRENT]),
+                        rejected: LENGTH(group[* FILTER "Reject" IN CURRENT])
+                    }
+                """,
+                bind_vars={"since": since},
+                raw_results=True,
+            )
+            for row in rows:
+                i = index.get(row["day"])
+                if i is not None:
+                    result["notifications"][i] = row["total"]
+                    result["accepted"][i] = row["accepted"]
+                    result["rejected"][i] = row["rejected"]
+        except Exception as e:
+            logger.error(f"Failed to build notifications timeseries: {e}")
+
+        return result
 
     def get_document_by_key(self, collection_name: str, key: str) -> dict[str, Any] | None:
         """
