@@ -130,6 +130,9 @@
 
     <div class="links">
       <h2>Endpoints</h2>
+      {% if status == 'up' %}
+        <a href="{{ url_for('dashboard') }}">Dashboard</a>
+      {% endif %}
       <a href="{{ url_for('health') }}">Health Check (JSON)</a>
       <a href="{{ url_for('api_software.software_status') }}">Software API Status</a>
       <a href="{{ url_for('api_documents.documents_status') }}">Documents API Status</a>

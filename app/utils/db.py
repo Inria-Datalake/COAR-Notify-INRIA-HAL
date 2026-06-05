@@ -507,6 +507,96 @@ class DatabaseManager:
             logger.error(f"Failed to get collection count for {collection_name}: {e}")
             return 0
 
+    def get_dashboard_stats(self) -> dict[str, Any]:
+        """
+        Aggregate counts for the overview dashboard (see ``/dashboard``).
+
+        Returns a single dict with the simple collection totals plus the
+        distinct-software count and the notification breakdowns by origin and by
+        COAR type. Every piece is computed defensively: a failure (or a cold,
+        empty DB) yields zeros / empty breakdowns rather than raising, so the
+        dashboard always renders.
+        """
+        stats: dict[str, Any] = {
+            "documents_count": 0,
+            "software_count": 0,
+            "distinct_software_count": 0,
+            "notifications_count": 0,
+            "notifications_by_origin": {},
+            "notifications_by_type": {},
+        }
+
+        # Simple totals via server-side AQL LENGTH(). We deliberately avoid
+        # get_collection_count() here: it relies on pyArango's cached collection
+        # list (hasCollection), which can be stale when another connection or
+        # gunicorn worker created the collection after this Database object was
+        # built — yielding a phantom 0. AQL always sees the live collections.
+        # The collection names are fixed literals, so interpolation is safe; a
+        # missing collection raises and is caught, leaving the total at 0.
+        def _count(collection_name: str) -> int:
+            try:
+                rows = list(
+                    self.execute_aql_query(f"RETURN LENGTH({collection_name})", raw_results=True)
+                )
+                return rows[0] if rows else 0
+            except Exception as e:
+                logger.error(f"Failed to count {collection_name}: {e}")
+                return 0
+
+        stats["documents_count"] = _count("documents")
+        stats["software_count"] = _count("software")
+        stats["notifications_count"] = _count("received_notifications")
+
+        # Distinct software names (normalized form), mirroring the distinct
+        # logic used elsewhere for software lookups.
+        try:
+            result = self.execute_aql_query(
+                "RETURN COUNT(FOR s IN software RETURN DISTINCT s.software_name.normalizedForm)",
+                raw_results=True,
+            )
+            rows = list(result)
+            stats["distinct_software_count"] = rows[0] if rows else 0
+        except Exception as e:
+            logger.error(f"Failed to count distinct software: {e}")
+
+        # Notifications grouped by our derived origin (swh / hal / unknown).
+        try:
+            result = self.execute_aql_query(
+                """
+                FOR n IN received_notifications
+                    COLLECT o = n.origin WITH COUNT INTO c
+                    RETURN {origin: o, count: c}
+                """,
+                raw_results=True,
+            )
+            stats["notifications_by_origin"] = {
+                (row["origin"] or "unknown"): row["count"] for row in result
+            }
+        except Exception as e:
+            logger.error(f"Failed to count notifications by origin: {e}")
+
+        # Notifications grouped by COAR type. `payload.type` is polymorphic
+        # (string or array), so flatten via IS_ARRAY just like
+        # distinct_received_notification_types does.
+        try:
+            result = self.execute_aql_query(
+                """
+                FOR n IN received_notifications
+                    LET ts = IS_ARRAY(n.payload.type) ? n.payload.type : [n.payload.type]
+                    FOR t IN ts
+                        FILTER t != null
+                        COLLECT type = t WITH COUNT INTO c
+                        SORT type
+                        RETURN {type: type, count: c}
+                """,
+                raw_results=True,
+            )
+            stats["notifications_by_type"] = {row["type"]: row["count"] for row in result}
+        except Exception as e:
+            logger.error(f"Failed to count notifications by type: {e}")
+
+        return stats
+
     def get_document_by_key(self, collection_name: str, key: str) -> dict[str, Any] | None:
         """
         Fetch a single document by `_key` from a named collection.

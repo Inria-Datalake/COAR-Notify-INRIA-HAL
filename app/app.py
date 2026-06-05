@@ -82,6 +82,15 @@ def home():
         return render_template("error.html", error=str(e))
 
 
+@app.get("/dashboard")
+def dashboard():
+    try:
+        stats = get_db().get_dashboard_stats()
+        return render_template("dashboard.html", stats=stats)
+    except Exception as e:
+        return render_template("error.html", error=str(e))
+
+
 @app.get("/health")
 def health():
     try:
