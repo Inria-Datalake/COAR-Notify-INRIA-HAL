@@ -29,7 +29,7 @@ services:
       retries: 12
 
   app:
-    image: lfoppiano/coar-notify-inria-hal:${APP_IMAGE_TAG:-v0.2.0}
+    image: lfoppiano/coar-notify-inria-hal:${APP_IMAGE_TAG:-v0.2.1}
     pull_policy: always
     depends_on:
       arangodb:
