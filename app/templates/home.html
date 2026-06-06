@@ -106,6 +106,11 @@
     .breakdown-card li:last-child { border-bottom: none; }
     .breakdown-card .value { font-weight: 600; color: #007bff; }
     .empty { color: #888; font-style: italic; }
+    .section-note {
+      color: #555;
+      font-size: .9rem;
+      margin: .25rem 0 1rem;
+    }
     .origin-table {
       width: 100%;
       border-collapse: collapse;
@@ -192,7 +197,13 @@
     </section>
 
     <section>
-      <h2>Notifications by origin</h2>
+      <h2>Notifications received by origin</h2>
+      <p class="section-note">
+        Inbound COAR notifications delivered to our <code>/inbox</code> &mdash; the author
+        <strong>Accept</strong> / <strong>Reject</strong> decisions on the software mentions we
+        announced. Software Heritage messages are recorded for audit but not acted on, so they
+        carry no accepted/rejected count.
+      </p>
       {% if stats.notifications_by_origin %}
         <table class="origin-table">
           <thead>
@@ -227,13 +238,15 @@
 
     <div class="links">
       <h2>Endpoints</h2>
+      <a href="{{ url_for('api_documents.latest_documents', limit=10) }}">Latest documents ingested</a>
+      <a href="{{ url_for('api_software.latest_software', limit=10) }}">Latest mentions extracted</a>
       <a href="{{ url_for('health') }}">Health Check (JSON)</a>
-      <a href="{{ url_for('api_software.software_status') }}">Software API Status</a>
-      <a href="{{ url_for('api_documents.documents_status') }}">Documents API Status</a>
       {% if status == 'up' %}
-        <a href="{{ url_for('coar_inbox.show_notifications') }}">View Notifications</a>
+        <a href="{{ url_for('coar_inbox.show_notifications') }}">View received notifications</a>
       {% endif %}
       <a href="{{ url_for('database_info') }}">Database Info</a>
+      <a href="https://github.com/Inria-Datalake/COAR-Notify-INRIA-HAL#readme"
+         target="_blank" rel="noopener">Documentation</a>
     </div>
   </main>
 
@@ -277,8 +290,8 @@
       });
     }
 
-    lineChart('chart-documents', 'Documents received', series.documents, '#6f42c1');
-    lineChart('chart-software', 'Software mentions received', series.software, '#fd7e14');
+    lineChart('chart-documents', 'Documents ingested', series.documents, '#6f42c1');
+    lineChart('chart-software', 'Software mentions ingested', series.software, '#fd7e14');
     lineChart('chart-total', 'Notifications received', series.notifications, '#007bff');
     lineChart('chart-accepted', 'Accepted', series.accepted, '#2e7d32');
     lineChart('chart-rejected', 'Rejected', series.rejected, '#c62828');

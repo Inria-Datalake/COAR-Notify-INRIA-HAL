@@ -681,6 +681,57 @@ class DatabaseManager:
 
         return result
 
+    def get_latest_documents(self, limit: int = 10) -> list[dict[str, Any]]:
+        """
+        The ``limit`` most recently ingested documents, newest first.
+
+        Sorted by ``created_at`` (stamped at ingestion from this version on), so
+        documents whose rows predate that field are not returned. Failures yield
+        an empty list rather than raising.
+        """
+        try:
+            return list(
+                self.execute_aql_query(
+                    """
+                    FOR d IN documents
+                        FILTER d.created_at != null
+                        SORT d.created_at DESC
+                        LIMIT @limit
+                        RETURN {file_hal_id: d.file_hal_id, created_at: d.created_at}
+                    """,
+                    bind_vars={"limit": limit},
+                    raw_results=True,
+                )
+            )
+        except Exception as e:
+            logger.error(f"Failed to get latest documents: {e}")
+            return []
+
+    def get_latest_mentions(self, limit: int = 10) -> list[dict[str, Any]]:
+        """
+        The ``limit`` most recently ingested software mentions, newest first.
+
+        Sorted by ``created_at`` like get_latest_documents. Returns the
+        normalized software name plus its ingestion timestamp.
+        """
+        try:
+            return list(
+                self.execute_aql_query(
+                    """
+                    FOR s IN software
+                        FILTER s.created_at != null
+                        SORT s.created_at DESC
+                        LIMIT @limit
+                        RETURN {name: s.software_name.normalizedForm, created_at: s.created_at}
+                    """,
+                    bind_vars={"limit": limit},
+                    raw_results=True,
+                )
+            )
+        except Exception as e:
+            logger.error(f"Failed to get latest mentions: {e}")
+            return []
+
     def get_document_by_key(self, collection_name: str, key: str) -> dict[str, Any] | None:
         """
         Fetch a single document by `_key` from a named collection.

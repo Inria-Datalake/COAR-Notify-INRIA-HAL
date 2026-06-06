@@ -31,6 +31,24 @@ def documents_status():
         return jsonify({"error": "Failed to retrieve documents status"}), 500
 
 
+@api_documents_bp.route("/api/documents/latest", methods=["GET"])
+def latest_documents():
+    """
+    Return the most recently ingested documents, newest first.
+
+    Query param ``limit`` (1-100, default 10) controls how many are returned.
+    Public (no API key) so it can be linked directly from the dashboard.
+    """
+    limit = request.args.get("limit", default=10, type=int) or 10
+    limit = max(1, min(limit, 100))
+    try:
+        documents = get_db().get_latest_documents(limit=limit)
+        return jsonify({"count": len(documents), "limit": limit, "documents": documents})
+    except Exception as e:
+        logger.error(f"Failed to get latest documents: {e}")
+        return jsonify({"error": "Failed to retrieve latest documents"}), 500
+
+
 @api_documents_bp.route("/api/document/<id>", methods=["GET"])
 def document_from_id(id):
     try:
