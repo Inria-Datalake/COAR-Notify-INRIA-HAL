@@ -27,6 +27,26 @@ def software_status():
         return jsonify({"error": "Failed to retrieve software status"}), 500
 
 
+@api_software_bp.route("/api/software/latest", methods=["GET"])
+def latest_software():
+    """
+    Return the most recently ingested software mentions, newest first.
+
+    Query param ``limit`` (1-100, default 10) controls how many are returned.
+    Public (no API key) so it can be linked directly from the dashboard. This
+    static rule is matched ahead of ``/api/software/<id_mention>`` by Werkzeug,
+    so "latest" is never treated as a mention id.
+    """
+    limit = request.args.get("limit", default=10, type=int) or 10
+    limit = max(1, min(limit, 100))
+    try:
+        mentions = get_db().get_latest_mentions(limit=limit)
+        return jsonify({"count": len(mentions), "limit": limit, "mentions": mentions})
+    except Exception as e:
+        logger.error(f"Failed to get latest software mentions: {e}")
+        return jsonify({"error": "Failed to retrieve latest software mentions"}), 500
+
+
 @api_software_bp.route("/api/software/name/<name>", methods=["GET"])
 def software_from_name(name):
     try:

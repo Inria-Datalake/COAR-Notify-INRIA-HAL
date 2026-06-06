@@ -66,9 +66,27 @@ def home():
     try:
         db_manager = get_db()
         connection_info = db_manager.get_connection_info()
+        stats = db_manager.get_dashboard_stats()
+        timeseries = db_manager.get_activity_timeseries(days=30)
 
         return render_template(
             "home.html",
+            status=connection_info["status"],
+            error=connection_info.get("error"),
+            stats=stats,
+            timeseries=timeseries,
+        )
+    except Exception as e:
+        return render_template("error.html", error=str(e))
+
+
+@app.get("/database")
+def database_info():
+    try:
+        connection_info = get_db().get_connection_info()
+
+        return render_template(
+            "database.html",
             status=connection_info["status"],
             host=connection_info["host"],
             port=connection_info["port"],

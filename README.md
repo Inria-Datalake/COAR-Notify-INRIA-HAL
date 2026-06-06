@@ -141,6 +141,7 @@ see [Database Schema Documentation](docs/database.md).
 | GET                      | `/status`                              | Yes           | Upload capability check                  |
 | **Document Management**  |
 | GET                      | `/api/documents`                       | No            | Documents collection status              |
+| GET                      | `/api/documents/latest`                | No            | Latest ingested documents (newest first) |
 | GET                      | `/api/document/<id>`                   | No            | Get document by ID                       |
 | DELETE                   | `/api/document/<id>`                   | Yes           | Delete document and all software mentions|
 | GET                      | `/api/document/<id>/software`          | No            | All software for document                |
@@ -148,6 +149,7 @@ see [Database Schema Documentation](docs/database.md).
 | POST                     | `/api/document`                        | Yes           | Insert document (triggers notifications) |
 | **Software Endpoints**   |
 | GET                      | `/api/software`                        | No            | Software collection status               |
+| GET                      | `/api/software/latest`                 | No            | Latest ingested mentions (newest first)  |
 | GET                      | `/api/software/name/<name>`            | No            | Software by normalized name              |
 | GET                      | `/api/software/<id_mention>`           | No            | Software mention by ID                   |
 | **Blacklist Management** |
@@ -225,6 +227,16 @@ curl -s -H "x-api-key: $API_KEY" http://localhost:5000/status | jq
 - **GET `/api/documents`**
     - Returns count and status of documents collection
 
+#### Latest Documents
+
+- **GET `/api/documents/latest`**
+    - Returns the most recently ingested documents, newest first
+    - Query Parameters:
+        - `limit`: Number of documents to return (1-100, default: 10)
+    - Sorted by ingestion time (`created_at`); documents ingested before this
+      field was introduced are not included
+    - Response: `{ "count", "limit", "documents": [{ "file_hal_id", "created_at" }] }`
+
 #### Get Document by ID
 
 - **GET `/api/document/<id>`**
@@ -288,6 +300,12 @@ Examples:
 # Get documents status
 curl -s http://localhost:5000/api/documents | jq
 
+# Get the 10 latest ingested documents (default limit)
+curl -s http://localhost:5000/api/documents/latest | jq
+
+# Get the 5 latest ingested documents
+curl -s "http://localhost:5000/api/documents/latest?limit=5" | jq
+
 # Get specific document
 curl -s http://localhost:5000/api/document/hal-01478788 | jq
 
@@ -314,6 +332,16 @@ curl -s -X POST \
 - **GET `/api/software`**
     - Returns count and status of software collection
 
+#### Latest Mentions
+
+- **GET `/api/software/latest`**
+    - Returns the most recently ingested software mentions, newest first
+    - Query Parameters:
+        - `limit`: Number of mentions to return (1-100, default: 10)
+    - Sorted by ingestion time (`created_at`); mentions ingested before this
+      field was introduced are not included
+    - Response: `{ "count", "limit", "mentions": [{ "name", "created_at" }] }`
+
 #### Get Software by Normalized Name
 
 - **GET `/api/software/name/<name>`**
@@ -330,6 +358,12 @@ Examples:
 ```sh
 # Get software collection status
 curl -s http://localhost:5000/api/software | jq
+
+# Get the 10 latest ingested mentions (default limit)
+curl -s http://localhost:5000/api/software/latest | jq
+
+# Get the 5 latest ingested mentions
+curl -s "http://localhost:5000/api/software/latest?limit=5" | jq
 
 # Get software by normalized name
 curl -s http://localhost:5000/api/software/name/python | jq

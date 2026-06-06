@@ -364,8 +364,15 @@ class DatabaseManager:
                 logger.warning(f"Document with ID '{document_id}' already exists in DB. Skipping.")
                 return False
 
+            # Timestamp ingestion so documents/software can be charted over time
+            # (see get_activity_timeseries). Stored as an ISO-8601 UTC string,
+            # matching received_notifications.received_at.
+            now_iso = datetime.datetime.now(datetime.UTC).isoformat()
+
             # Insert main document
-            document_document = documents_collection.createDocument({"file_hal_id": document_id})
+            document_document = documents_collection.createDocument(
+                {"file_hal_id": document_id, "created_at": now_iso}
+            )
             document_document.save()
             logger.debug(f"Created document with ID: {document_id}")
 
@@ -381,6 +388,7 @@ class DatabaseManager:
                     mention["software_type"] = mention.pop("software-type")
 
                     # Insert software document
+                    mention["created_at"] = now_iso
                     software_document = software_collection.createDocument(mention)
                     software_document.save()
 
@@ -506,6 +514,223 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to get collection count for {collection_name}: {e}")
             return 0
+
+    def get_dashboard_stats(self) -> dict[str, Any]:
+        """
+        Aggregate counts for the overview dashboard (see ``/dashboard``).
+
+        Returns a single dict with the simple collection totals plus the
+        distinct-software count and the notification breakdowns by origin and by
+        COAR type. Every piece is computed defensively: a failure (or a cold,
+        empty DB) yields zeros / empty breakdowns rather than raising, so the
+        dashboard always renders.
+        """
+        stats: dict[str, Any] = {
+            "documents_count": 0,
+            "software_count": 0,
+            "distinct_software_count": 0,
+            "notifications_count": 0,
+            # origin -> {"total": n, "accepted": a, "rejected": r}
+            "notifications_by_origin": {},
+        }
+
+        # Simple totals via server-side AQL LENGTH(). We deliberately avoid
+        # get_collection_count() here: it relies on pyArango's cached collection
+        # list (hasCollection), which can be stale when another connection or
+        # gunicorn worker created the collection after this Database object was
+        # built — yielding a phantom 0. AQL always sees the live collections.
+        # The collection names are fixed literals, so interpolation is safe; a
+        # missing collection raises and is caught, leaving the total at 0.
+        def _count(collection_name: str) -> int:
+            try:
+                rows = list(
+                    self.execute_aql_query(f"RETURN LENGTH({collection_name})", raw_results=True)
+                )
+                return rows[0] if rows else 0
+            except Exception as e:
+                logger.error(f"Failed to count {collection_name}: {e}")
+                return 0
+
+        stats["documents_count"] = _count("documents")
+        stats["software_count"] = _count("software")
+        stats["notifications_count"] = _count("received_notifications")
+
+        # Distinct software names (normalized form), mirroring the distinct
+        # logic used elsewhere for software lookups.
+        try:
+            result = self.execute_aql_query(
+                "RETURN COUNT(FOR s IN software RETURN DISTINCT s.software_name.normalizedForm)",
+                raw_results=True,
+            )
+            rows = list(result)
+            stats["distinct_software_count"] = rows[0] if rows else 0
+        except Exception as e:
+            logger.error(f"Failed to count distinct software: {e}")
+
+        # Notifications grouped by our derived origin (swh / hal / unknown),
+        # with the accepted/rejected split per origin. `payload.type` is
+        # polymorphic (string or array), handled via IS_ARRAY; COLLECT ... INTO
+        # group = ts gathers each notification's type list so we can count the
+        # ones containing Accept / Reject within each origin.
+        try:
+            result = self.execute_aql_query(
+                """
+                FOR n IN received_notifications
+                    LET ts = IS_ARRAY(n.payload.type) ? n.payload.type : [n.payload.type]
+                    COLLECT o = n.origin INTO group = ts
+                    RETURN {
+                        origin: o,
+                        total: LENGTH(group),
+                        accepted: LENGTH(group[* FILTER "Accept" IN CURRENT]),
+                        rejected: LENGTH(group[* FILTER "Reject" IN CURRENT])
+                    }
+                """,
+                raw_results=True,
+            )
+            stats["notifications_by_origin"] = {
+                (row["origin"] or "unknown"): {
+                    "total": row["total"],
+                    "accepted": row["accepted"],
+                    "rejected": row["rejected"],
+                }
+                for row in result
+            }
+        except Exception as e:
+            logger.error(f"Failed to count notifications by origin: {e}")
+
+        return stats
+
+    def get_activity_timeseries(self, days: int = 30) -> dict[str, Any]:
+        """
+        Daily activity counts for the last ``days`` days (default 30).
+
+        Returns a dict with a ``labels`` list (one ``YYYY-MM-DD`` per day, oldest
+        first) and five equal-length series suitable for plotting:
+        ``documents`` and ``software`` (by ingestion ``created_at``), and
+        ``notifications`` / ``accepted`` / ``rejected`` (by ``received_at``).
+        Days with no activity are zero-filled so the axis is continuous, like
+        coar-viz's 30-day charts.
+
+        Documents/software only gained a ``created_at`` from this version on, so
+        rows ingested earlier are simply absent from the window. Each query is
+        guarded independently; a failure yields a zero series rather than raising.
+        """
+        # Continuous date axis in Python (today back to days-1 ago).
+        today = datetime.datetime.now(datetime.UTC).date()
+        axis = [today - datetime.timedelta(days=i) for i in range(days - 1, -1, -1)]
+        labels = [d.isoformat() for d in axis]
+        index = {label: i for i, label in enumerate(labels)}
+        since = axis[0].isoformat()  # ISO dates compare lexicographically.
+
+        result: dict[str, Any] = {
+            "labels": labels,
+            "documents": [0] * days,
+            "software": [0] * days,
+            "notifications": [0] * days,
+            "accepted": [0] * days,
+            "rejected": [0] * days,
+        }
+
+        # Documents and software, grouped by their ingestion date (created_at).
+        for series_key, collection_name in (("documents", "documents"), ("software", "software")):
+            try:
+                rows = self.execute_aql_query(
+                    f"""
+                    FOR d IN {collection_name}
+                        FILTER d.created_at != null
+                            AND SUBSTRING(d.created_at, 0, 10) >= @since
+                        COLLECT day = SUBSTRING(d.created_at, 0, 10) WITH COUNT INTO c
+                        RETURN {{day: day, count: c}}
+                    """,
+                    bind_vars={"since": since},
+                    raw_results=True,
+                )
+                for row in rows:
+                    i = index.get(row["day"])
+                    if i is not None:
+                        result[series_key][i] = row["count"]
+            except Exception as e:
+                logger.error(f"Failed to build {collection_name} timeseries: {e}")
+
+        # Notifications received, with the accepted/rejected split, by received_at.
+        try:
+            rows = self.execute_aql_query(
+                """
+                FOR n IN received_notifications
+                    FILTER SUBSTRING(n.received_at, 0, 10) >= @since
+                    LET ts = IS_ARRAY(n.payload.type) ? n.payload.type : [n.payload.type]
+                    COLLECT day = SUBSTRING(n.received_at, 0, 10) INTO group = ts
+                    RETURN {
+                        day: day,
+                        total: LENGTH(group),
+                        accepted: LENGTH(group[* FILTER "Accept" IN CURRENT]),
+                        rejected: LENGTH(group[* FILTER "Reject" IN CURRENT])
+                    }
+                """,
+                bind_vars={"since": since},
+                raw_results=True,
+            )
+            for row in rows:
+                i = index.get(row["day"])
+                if i is not None:
+                    result["notifications"][i] = row["total"]
+                    result["accepted"][i] = row["accepted"]
+                    result["rejected"][i] = row["rejected"]
+        except Exception as e:
+            logger.error(f"Failed to build notifications timeseries: {e}")
+
+        return result
+
+    def get_latest_documents(self, limit: int = 10) -> list[dict[str, Any]]:
+        """
+        The ``limit`` most recently ingested documents, newest first.
+
+        Sorted by ``created_at`` (stamped at ingestion from this version on), so
+        documents whose rows predate that field are not returned. Failures yield
+        an empty list rather than raising.
+        """
+        try:
+            return list(
+                self.execute_aql_query(
+                    """
+                    FOR d IN documents
+                        FILTER d.created_at != null
+                        SORT d.created_at DESC
+                        LIMIT @limit
+                        RETURN {file_hal_id: d.file_hal_id, created_at: d.created_at}
+                    """,
+                    bind_vars={"limit": limit},
+                    raw_results=True,
+                )
+            )
+        except Exception as e:
+            logger.error(f"Failed to get latest documents: {e}")
+            return []
+
+    def get_latest_mentions(self, limit: int = 10) -> list[dict[str, Any]]:
+        """
+        The ``limit`` most recently ingested software mentions, newest first.
+
+        Sorted by ``created_at`` like get_latest_documents. Returns the
+        normalized software name plus its ingestion timestamp.
+        """
+        try:
+            return list(
+                self.execute_aql_query(
+                    """
+                    FOR s IN software
+                        FILTER s.created_at != null
+                        SORT s.created_at DESC
+                        LIMIT @limit
+                        RETURN {name: s.software_name.normalizedForm, created_at: s.created_at}
+                    """,
+                    bind_vars={"limit": limit},
+                    raw_results=True,
+                )
+            )
+        except Exception as e:
+            logger.error(f"Failed to get latest mentions: {e}")
+            return []
 
     def get_document_by_key(self, collection_name: str, key: str) -> dict[str, Any] | None:
         """
