@@ -81,3 +81,11 @@ sign_tags = false
 filename = "pyproject.toml"
 search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
+
+# Keep the prod compose default image tag in sync with the released version.
+# Without this, the `${APP_IMAGE_TAG:-v0.2.0}` fallback silently drifts and a
+# deploy that doesn't pin APP_IMAGE_TAG would run the previous release.
+[[tool.bumpversion.files]]
+filename = "docker-compose.prod.yml"
+search = 'APP_IMAGE_TAG:-v{current_version}'
+replace = 'APP_IMAGE_TAG:-v{new_version}'
