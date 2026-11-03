@@ -42,6 +42,34 @@ def env_with_legacy(new_key: str, legacy_key: str, default: str) -> str:
     return default
 
 
+def _bucket_for_span(span_days: int) -> str:
+    """Bucket size for an activity window: daily up to 90 days, weekly up to a
+    year, monthly beyond, keeping charts at roughly 90 points or fewer."""
+    if span_days <= 90:
+        return "day"
+    if span_days <= 366:
+        return "week"
+    return "month"
+
+
+def _bucket_start(d: datetime.date, bucket: str) -> datetime.date:
+    """First day of the bucket containing ``d`` (ISO Monday for weeks)."""
+    if bucket == "week":
+        return d - datetime.timedelta(days=d.weekday())
+    if bucket == "month":
+        return d.replace(day=1)
+    return d
+
+
+def _next_bucket(d: datetime.date, bucket: str) -> datetime.date:
+    """First day of the bucket after the one starting at ``d``."""
+    if bucket == "week":
+        return d + datetime.timedelta(days=7)
+    if bucket == "month":
+        return (d.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
+    return d + datetime.timedelta(days=1)
+
+
 class DatabaseManager:
     """
     Centralized database management class for ArangoDB operations.
@@ -66,6 +94,20 @@ class DatabaseManager:
             {"fields": ["origin"]},
             {"fields": ["received_at"]},
         ],
+        # One record per outbound COAR notification attempt (HAL / SWH). Listed
+        # newest-first by sent_at and filtered by target / document / software name.
+        # notification_id is the payload's uuid4 URN: unique so an attempt is never
+        # recorded twice, and so received Accept/Reject replies (whose inReplyTo
+        # carries that URN) can be joined to the originating send later. The
+        # index is sparse (pyArango default), so a record whose notifier failed
+        # to build (notification_id null) is still accepted.
+        "sent_notifications": [
+            {"fields": ["sent_at"]},
+            {"fields": ["target"]},
+            {"fields": ["document_id"]},
+            {"fields": ["software_name"]},
+            {"fields": ["notification_id"], "unique": True},
+        ],
         # One record per blacklisted term; the unique index makes add idempotent
         # at the DB level and speeds up membership lookups.
         "blacklist": [
@@ -84,9 +126,9 @@ class DatabaseManager:
             {"fields": ["blacklisted", "quality_invalid", "created_at"]},
             {"fields": ["software_name.normalizedForm"]},
             {"fields": ["quality_score"]},
-            # Covering index for count_distinct_unnotifiable_software: its per-name
-            # AGGREGATE reads the two flags, so they must be in the index or every
-            # entry costs a full-document fetch (~2M point lookups, 12-23s in prod).
+            # Covering index for get_software_distribution: its per-name AGGREGATE
+            # reads the two flags, so they must be in the index or every entry
+            # costs a full-document fetch (~2M point lookups, 12-23s in prod).
             # Non-sparse, because the query only guarantees normalizedForm != null
             # and the optimizer rejects a sparse index unless all fields are non-null.
             {
@@ -691,67 +733,6 @@ class DatabaseManager:
             logger.error(f"Failed to get software notifications for {document_id}: {e}")
             return []
 
-    def count_distinct_unnotifiable_software(self, quality_enabled: bool = False) -> int:
-        """
-        Count the distinct software names that would get **no** outbound
-        notification — the exclusion set to subtract from the distinct-name total
-        when inferring "notifications sent" (sent = distinct total - this).
-
-        A name is excluded when it is blacklisted **or** (when the Mention Quality
-        Filter is on) quality-filtered, i.e. left with no mention that is both
-        non-blacklisted and non-quality-invalid. Blacklisting is applied per name
-        (all or none of a name's mentions carry the flag), so with the quality
-        filter off the "blacklisted OR filtered" union collapses to just the
-        blacklisted names — a cheap, index-backed distinct count. Only when the
-        quality filter is on do we need the per-name grouping to find names with
-        no surviving mention.
-
-        This works purely on the ``software`` collection (no document/edge
-        traversal) and deliberately ignores the per-provider created/used/shared
-        mode filters (a per-mention notion, not a per-name one; no-ops under the
-        default ``all`` modes).
-
-        Args:
-            quality_enabled: whether the Mention Quality Filter is active
-                (pass MENTION_QUALITY_FILTER_ENABLED).
-
-        Returns:
-            int: distinct excluded software names, or 0 on failure.
-        """
-        try:
-            if not quality_enabled:
-                query = """
-                    RETURN COUNT(
-                        FOR s IN software
-                            FILTER s.blacklisted == true
-                                AND s.software_name.normalizedForm != null
-                            RETURN DISTINCT s.software_name.normalizedForm
-                    )
-                """
-            else:
-                # Union of blacklisted and quality-filtered: group by name and keep
-                # only names with zero mentions surviving both filters.
-                # `> null` (equivalent to != null: null sorts below every value) is a
-                # range condition the covering compound index can serve; with != null
-                # the optimizer falls back to per-document fetches (~10s on prod).
-                query = """
-                    FOR s IN software
-                        FILTER s.software_name.normalizedForm > null
-                        COLLECT name = s.software_name.normalizedForm
-                            AGGREGATE valid = SUM(
-                                s.blacklisted != true AND s.quality_invalid != true ? 1 : 0
-                            )
-                        FILTER valid == 0
-                        COLLECT WITH COUNT INTO c
-                        RETURN c
-                """
-            rows = list(self.execute_aql_query(query, raw_results=True))
-            return rows[0] if rows else 0
-
-        except Exception as e:
-            logger.error(f"Failed to count distinct unnotifiable software: {e}")
-            return 0
-
     def reapply_blacklist(self, blacklist: set[str]) -> dict[str, int]:
         """
         Recompute the ``blacklisted`` flag on every stored software mention.
@@ -1016,6 +997,12 @@ class DatabaseManager:
             "notifications_count": 0,
             # origin -> {"total": n, "accepted": a, "rejected": r}
             "notifications_by_origin": {},
+            # Outbound notifications recorded in sent_notifications (since the
+            # version that introduced the collection; earlier sends are unknown).
+            "notifications_sent_count": 0,  # successful (HTTP 2xx) sends
+            "notifications_sent_failed_count": 0,
+            # target -> {"total": n, "succeeded": s, "failed": f}
+            "notifications_sent_by_target": {},
         }
 
         # Simple totals via server-side AQL LENGTH(). We deliberately avoid
@@ -1086,56 +1073,160 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to count notifications by origin: {e}")
 
+        # Outbound notifications by target (hal / swh) with the succeeded/failed
+        # split; the overall totals are the sums over the targets.
+        try:
+            result = self.execute_aql_query(
+                """
+                FOR n IN sent_notifications
+                    COLLECT t = n.target
+                        AGGREGATE total = COUNT(1),
+                                  succeeded = SUM(n.success == true ? 1 : 0)
+                    RETURN {
+                        target: t,
+                        total: total,
+                        succeeded: succeeded,
+                        failed: total - succeeded
+                    }
+                """,
+                raw_results=True,
+            )
+            by_target: dict[str, dict[str, int]] = {}
+            for row in result:
+                by_target[row["target"] or "unknown"] = {
+                    "total": row["total"],
+                    "succeeded": row["succeeded"],
+                    "failed": row["failed"],
+                }
+            stats["notifications_sent_by_target"] = by_target
+            stats["notifications_sent_count"] = sum(v["succeeded"] for v in by_target.values())
+            stats["notifications_sent_failed_count"] = sum(v["failed"] for v in by_target.values())
+        except Exception as e:
+            logger.error(f"Failed to count sent notifications by target: {e}")
+
         return stats
 
-    def get_activity_timeseries(
-        self, days: int = 30, quality_enabled: bool = False
-    ) -> dict[str, Any]:
+    def _earliest_activity_date(self) -> datetime.date | None:
         """
-        Daily activity counts for the last ``days`` days (default 30).
+        The earliest day with any recorded activity (document ingestion, received
+        or sent notification), used as the start of the "all time" window.
 
-        Returns a dict with a ``labels`` list (one ``YYYY-MM-DD`` per day, oldest
-        first) and eight equal-length series suitable for plotting:
+        Each sub-query walks the collection's sparse timestamp index in order and
+        stops at the first entry (``> null`` keeps the sparse index eligible, see
+        get_software_distribution). Returns None on an empty DB or on failure.
+        """
+        try:
+            rows = list(
+                self.execute_aql_query(
+                    """
+                    RETURN MIN([
+                        FIRST(FOR d IN documents
+                                  FILTER d.created_at > null
+                                  SORT d.created_at ASC LIMIT 1
+                                  RETURN d.created_at),
+                        FIRST(FOR n IN received_notifications
+                                  FILTER n.received_at > null
+                                  SORT n.received_at ASC LIMIT 1
+                                  RETURN n.received_at),
+                        FIRST(FOR n IN sent_notifications
+                                  FILTER n.sent_at > null
+                                  SORT n.sent_at ASC LIMIT 1
+                                  RETURN n.sent_at)
+                    ])
+                    """,
+                    raw_results=True,
+                )
+            )
+            if rows and rows[0]:
+                return datetime.date.fromisoformat(str(rows[0])[:10])
+        except Exception as e:
+            logger.error(f"Failed to find the earliest activity date: {e}")
+        return None
+
+    def get_activity_timeseries(self, days: int | None = 30) -> dict[str, Any]:
+        """
+        Activity counts over the last ``days`` days (default 30), or over the
+        whole recorded history when ``days`` is None.
+
+        The window is split into buckets whose size adapts to its length (see
+        ``_bucket_for_span``: daily up to 90 days, weekly up to a year, monthly
+        beyond), so a long window still yields a readable chart. Returns a dict
+        with ``labels`` (the ISO date of each bucket's first day, oldest first),
+        ``bucket`` (``"day"`` / ``"week"`` / ``"month"``), ``since`` / ``until``
+        (ISO dates of the window) and ``spans_years`` (whether the window crosses
+        a year boundary, for label formatting), plus nine equal-length series:
         ``documents`` and ``software`` (by ingestion ``created_at``),
         ``blacklisted`` and ``quality_invalid`` (software mentions flagged by the
         blacklist / Mention Quality Filter, also by ``created_at``),
         ``notifications`` / ``accepted`` / ``rejected`` (by ``received_at``), and
-        ``sent`` (inferred distinct notifiable software names per ingestion day;
-        honours ``quality_enabled`` for the quality filter, matching the send
-        path). Days with no activity are zero-filled so the axis is continuous,
-        like coar-viz's 30-day charts.
+        ``sent`` / ``sent_failed`` (outbound notifications recorded in
+        ``sent_notifications`` by ``sent_at``, split on their ``success`` flag).
+        Buckets with no activity are zero-filled so the axis is continuous.
 
-        Documents/software only gained a ``created_at`` from this version on, so
-        rows ingested earlier are simply absent from the window. Each query is
+        Each AQL query filters on the raw ISO timestamp (``>= @since`` with a
+        ``YYYY-MM-DD`` bound, which sorts before any ``YYYY-MM-DDT...`` value of
+        that day) so the collection's timestamp index serves the range scan, and
+        groups by day; the daily rows are then folded into buckets here.
+        Documents/software only gained a ``created_at`` from the version that
+        introduced it, so rows ingested earlier are simply absent. Each query is
         guarded independently; a failure yields a zero series rather than raising.
         """
-        # Continuous date axis in Python (today back to days-1 ago).
         today = datetime.datetime.now(datetime.UTC).date()
-        axis = [today - datetime.timedelta(days=i) for i in range(days - 1, -1, -1)]
+        if days is None:
+            earliest = self._earliest_activity_date()
+            start = earliest or today - datetime.timedelta(days=364)
+        else:
+            start = today - datetime.timedelta(days=max(days, 1) - 1)
+        bucket = _bucket_for_span((today - start).days + 1)
+        # Snap to the bucket boundary so the first bucket is a complete one.
+        start = _bucket_start(start, bucket)
+
+        axis: list[datetime.date] = []
+        current = start
+        while current <= today:
+            axis.append(current)
+            current = _next_bucket(current, bucket)
         labels = [d.isoformat() for d in axis]
         index = {label: i for i, label in enumerate(labels)}
-        since = axis[0].isoformat()  # ISO dates compare lexicographically.
+        since = start.isoformat()  # ISO dates compare lexicographically.
+        n = len(axis)
+
+        def slot(day: str) -> int | None:
+            """Bucket position of a ``YYYY-MM-DD`` day, or None if outside the axis."""
+            try:
+                return index.get(
+                    _bucket_start(datetime.date.fromisoformat(day), bucket).isoformat()
+                )
+            except ValueError:
+                return None
 
         result: dict[str, Any] = {
             "labels": labels,
-            "documents": [0] * days,
-            "software": [0] * days,
-            "blacklisted": [0] * days,
-            "quality_invalid": [0] * days,
-            "notifications": [0] * days,
-            "accepted": [0] * days,
-            "rejected": [0] * days,
-            "sent": [0] * days,
+            "bucket": bucket,
+            "since": since,
+            "until": today.isoformat(),
+            "spans_years": start.year != today.year,
+            "documents": [0] * n,
+            "software": [0] * n,
+            "blacklisted": [0] * n,
+            "quality_invalid": [0] * n,
+            "notifications": [0] * n,
+            "accepted": [0] * n,
+            "rejected": [0] * n,
+            "sent": [0] * n,
+            "sent_failed": [0] * n,
         }
 
         # Documents and software, grouped by their ingestion date (created_at).
+        # No `!= null` guard is needed: null sorts below every string in AQL, so
+        # the range condition alone excludes untimestamped rows and lets the
+        # sparse created_at index serve the scan.
         for series_key, collection_name in (("documents", "documents"), ("software", "software")):
             try:
                 rows = self.execute_aql_query(
                     f"""
                     FOR d IN {collection_name}
-                        FILTER d.created_at != null
-                            AND SUBSTRING(d.created_at, 0, 10) >= @since
+                        FILTER d.created_at >= @since
                         COLLECT day = SUBSTRING(d.created_at, 0, 10) WITH COUNT INTO c
                         RETURN {{day: day, count: c}}
                     """,
@@ -1143,39 +1234,33 @@ class DatabaseManager:
                     raw_results=True,
                 )
                 for row in rows:
-                    i = index.get(row["day"])
+                    i = slot(row["day"])
                     if i is not None:
-                        result[series_key][i] = row["count"]
+                        result[series_key][i] += row["count"]
             except Exception as e:
                 logger.error(f"Failed to build {collection_name} timeseries: {e}")
 
         # Software mentions flagged by the blacklist / Mention Quality Filter,
-        # by ingestion date — the daily "filter usage" histograms. Both counts
-        # come from one pass over software (like the accepted/rejected split).
+        # by ingestion date — the "filter usage" histograms. Both counts come
+        # from one pass over software.
         try:
             rows = self.execute_aql_query(
                 """
                 FOR s IN software
-                    FILTER s.created_at != null
-                        AND SUBSTRING(s.created_at, 0, 10) >= @since
-                    COLLECT day = SUBSTRING(s.created_at, 0, 10) INTO group = {
-                        blacklisted: s.blacklisted == true,
-                        quality_invalid: s.quality_invalid == true
-                    }
-                    RETURN {
-                        day: day,
-                        blacklisted: LENGTH(group[* FILTER CURRENT.blacklisted]),
-                        quality_invalid: LENGTH(group[* FILTER CURRENT.quality_invalid])
-                    }
+                    FILTER s.created_at >= @since
+                    COLLECT day = SUBSTRING(s.created_at, 0, 10)
+                        AGGREGATE blacklisted = SUM(s.blacklisted == true ? 1 : 0),
+                                  quality_invalid = SUM(s.quality_invalid == true ? 1 : 0)
+                    RETURN {day: day, blacklisted: blacklisted, quality_invalid: quality_invalid}
                 """,
                 bind_vars={"since": since},
                 raw_results=True,
             )
             for row in rows:
-                i = index.get(row["day"])
+                i = slot(row["day"])
                 if i is not None:
-                    result["blacklisted"][i] = row["blacklisted"]
-                    result["quality_invalid"][i] = row["quality_invalid"]
+                    result["blacklisted"][i] += row["blacklisted"]
+                    result["quality_invalid"][i] += row["quality_invalid"]
         except Exception as e:
             logger.error(f"Failed to build filter-usage timeseries: {e}")
 
@@ -1184,7 +1269,7 @@ class DatabaseManager:
             rows = self.execute_aql_query(
                 """
                 FOR n IN received_notifications
-                    FILTER SUBSTRING(n.received_at, 0, 10) >= @since
+                    FILTER n.received_at >= @since
                     LET ts = IS_ARRAY(n.payload.type) ? n.payload.type : [n.payload.type]
                     COLLECT day = SUBSTRING(n.received_at, 0, 10) INTO group = ts
                     RETURN {
@@ -1198,45 +1283,104 @@ class DatabaseManager:
                 raw_results=True,
             )
             for row in rows:
-                i = index.get(row["day"])
+                i = slot(row["day"])
                 if i is not None:
-                    result["notifications"][i] = row["total"]
-                    result["accepted"][i] = row["accepted"]
-                    result["rejected"][i] = row["rejected"]
+                    result["notifications"][i] += row["total"]
+                    result["accepted"][i] += row["accepted"]
+                    result["rejected"][i] += row["rejected"]
         except Exception as e:
             logger.error(f"Failed to build notifications timeseries: {e}")
 
-        # Inferred notifications "sent" per day: distinct notifiable software names
-        # (normalizedForm) among mentions created that day. Notifiable = not
-        # blacklisted and, when the Mention Quality Filter is on, not quality
-        # invalid. Filters on the raw created_at (ISO strings compare
-        # lexicographically) so the created_at index serves the range scan;
-        # SUBSTRING only buckets by day. A name mentioned on several days is
-        # counted on each, so the daily values intentionally do not sum to the
-        # distinct-name total shown on the "Notifications sent" card.
+        # Notifications sent (recorded attempts), split on success, by sent_at.
         try:
             rows = self.execute_aql_query(
                 """
-                FOR s IN software
-                    FILTER s.created_at >= @since
-                        AND s.software_name.normalizedForm != null
-                        AND s.blacklisted != true
-                        AND (@quality_enabled == false OR s.quality_invalid != true)
-                    COLLECT day = SUBSTRING(s.created_at, 0, 10),
-                            name = s.software_name.normalizedForm
-                    COLLECT d = day WITH COUNT INTO c
-                    RETURN {day: d, count: c}
+                FOR n IN sent_notifications
+                    FILTER n.sent_at >= @since
+                    COLLECT day = SUBSTRING(n.sent_at, 0, 10)
+                        AGGREGATE total = COUNT(1),
+                                  succeeded = SUM(n.success == true ? 1 : 0)
+                    RETURN {day: day, succeeded: succeeded, failed: total - succeeded}
                 """,
-                bind_vars={"since": since, "quality_enabled": quality_enabled},
+                bind_vars={"since": since},
                 raw_results=True,
             )
             for row in rows:
-                i = index.get(row["day"])
+                i = slot(row["day"])
                 if i is not None:
-                    result["sent"][i] = row["count"]
+                    result["sent"][i] += row["succeeded"]
+                    result["sent_failed"][i] += row["failed"]
         except Exception as e:
             logger.error(f"Failed to build sent-notifications timeseries: {e}")
 
+        return result
+
+    def get_software_distribution(
+        self,
+        limit: int = 20,
+        exclude_blacklisted: bool = True,
+        exclude_quality_invalid: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Mentions per software name (``software_name.normalizedForm``), most
+        mentioned first, limited to the top ``limit`` names, plus the totals the
+        UI needs for "top N of M": ``total_names`` (distinct names with at least
+        one counted mention) and ``total_mentions``.
+
+        ``exclude_blacklisted`` / ``exclude_quality_invalid`` leave the
+        corresponding flagged mentions out of the counts (a name whose mentions
+        are all excluded disappears). The exclusions are folded into the
+        AGGREGATE rather than expressed as FILTERs, and the name condition uses
+        ``> null`` (equivalent to ``!= null``: null sorts below every value), so
+        the whole thing is one pass over the covering
+        ``[normalizedForm, blacklisted, quality_invalid]`` index with no
+        per-document fetch (~2M mentions in prod). Returns zeros / an empty
+        ``items`` list on failure.
+        """
+        result: dict[str, Any] = {
+            "limit": limit,
+            "exclude_blacklisted": exclude_blacklisted,
+            "exclude_quality_invalid": exclude_quality_invalid,
+            "total_names": 0,
+            "total_mentions": 0,
+            "items": [],
+        }
+        try:
+            rows = list(
+                self.execute_aql_query(
+                    """
+                    LET grouped = (
+                        FOR s IN software
+                            FILTER s.software_name.normalizedForm > null
+                            COLLECT name = s.software_name.normalizedForm
+                                AGGREGATE c = SUM(
+                                    (@exclude_blacklisted == false OR s.blacklisted != true)
+                                    AND (@exclude_quality_invalid == false
+                                         OR s.quality_invalid != true) ? 1 : 0
+                                )
+                            FILTER c > 0
+                            RETURN {name: name, count: c}
+                    )
+                    RETURN {
+                        total_names: LENGTH(grouped),
+                        total_mentions: SUM(grouped[*].count),
+                        items: (FOR g IN grouped SORT g.count DESC, g.name ASC LIMIT @limit RETURN g)
+                    }
+                    """,
+                    bind_vars={
+                        "limit": limit,
+                        "exclude_blacklisted": exclude_blacklisted,
+                        "exclude_quality_invalid": exclude_quality_invalid,
+                    },
+                    raw_results=True,
+                )
+            )
+            if rows:
+                result["total_names"] = rows[0].get("total_names") or 0
+                result["total_mentions"] = rows[0].get("total_mentions") or 0
+                result["items"] = rows[0].get("items") or []
+        except Exception as e:
+            logger.error(f"Failed to compute software distribution: {e}")
         return result
 
     def get_latest_documents(self, limit: int = 10) -> list[dict[str, Any]]:
@@ -1455,6 +1599,125 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to list distinct notification types: {e}")
             return []
+
+    def store_sent_notification(
+        self,
+        *,
+        target: str,
+        document_id: str,
+        software_name: str | None,
+        payload: dict[str, Any],
+        target_inbox: str | None,
+        success: bool,
+        http_status: int | None,
+        error: str | None,
+        mention_context_attributes: dict[str, bool] | None,
+        filter_mode: str | None,
+    ) -> str | None:
+        """
+        Persist one outbound COAR notification attempt (successful or not) in
+        ``sent_notifications`` for the dashboard and ``/notifications/sent``.
+
+        ``target`` is the provider ("hal" / "swh"), ``payload`` the JSON-LD that
+        was (or would have been) POSTed; its ``id`` URN and ``type`` are lifted
+        to top-level fields for indexing and filtering. ``success`` is transport
+        success (HTTP 2xx); the author's later Accept/Reject lives in
+        ``received_notifications``. Never raises: storage must not fail the send.
+
+        Returns:
+            the new record's ``_key``, or None on failure.
+        """
+        try:
+            collection = self.check_or_create_collection("sent_notifications")
+            doc = collection.createDocument(
+                {
+                    "sent_at": datetime.datetime.now(datetime.UTC).isoformat(),
+                    "target": target,
+                    "document_id": document_id,
+                    "software_name": software_name,
+                    "notification_id": payload.get("id"),
+                    "notification_type": payload.get("type"),
+                    "target_inbox": target_inbox,
+                    "payload": payload,
+                    "success": success,
+                    "http_status": http_status,
+                    "error": error,
+                    "mention_context_attributes": mention_context_attributes,
+                    "filter_mode": filter_mode,
+                }
+            )
+            doc.save()
+            return str(doc._key)
+        except Exception as e:
+            logger.error(f"Failed to persist sent notification: {e}")
+            return None
+
+    def list_sent_notifications(
+        self,
+        limit: int = 100,
+        target: str | None = None,
+        document_id: str | None = None,
+        success: bool | None = None,
+        software_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Return the most recent sent-notification records, newest first.
+
+        Each optional argument adds an exact-match filter (``target`` "hal" /
+        "swh", the HAL ``document_id``, the ``success`` flag, the normalized
+        ``software_name``).
+        """
+        try:
+            self.check_or_create_collection("sent_notifications")
+            bind_vars: dict[str, Any] = {"limit": limit}
+            filters = []
+            if target:
+                filters.append("FILTER n.target == @target")
+                bind_vars["target"] = target
+            if document_id:
+                filters.append("FILTER n.document_id == @document_id")
+                bind_vars["document_id"] = document_id
+            if success is not None:
+                filters.append("FILTER n.success == @success")
+                bind_vars["success"] = success
+            if software_name:
+                filters.append("FILTER n.software_name == @software_name")
+                bind_vars["software_name"] = software_name
+            filter_clause = "\n                    ".join(filters)
+            query = f"""
+                FOR n IN sent_notifications
+                    {filter_clause}
+                    SORT n.sent_at DESC
+                    LIMIT @limit
+                    RETURN n
+            """
+            result = self.execute_aql_query(query, bind_vars=bind_vars, raw_results=True)
+            return list(result)
+        except Exception as e:
+            logger.error(f"Failed to list sent notifications: {e}")
+            return []
+
+    def count_sent_notifications(self, success: bool | None = None) -> int:
+        """Number of sent-notification records, optionally only the (un)successful ones."""
+        try:
+            self.check_or_create_collection("sent_notifications")
+            if success is None:
+                rows = list(
+                    self.execute_aql_query("RETURN LENGTH(sent_notifications)", raw_results=True)
+                )
+            else:
+                rows = list(
+                    self.execute_aql_query(
+                        "RETURN COUNT(FOR n IN sent_notifications "
+                        "FILTER n.success == @success RETURN 1)",
+                        bind_vars={"success": success},
+                        raw_results=True,
+                    )
+                )
+            return rows[0] if rows else 0
+        except Exception as e:
+            logger.error(f"Failed to count sent notifications: {e}")
+            return 0
 
     def get_document_by_id(self, id: str) -> dict[str, Any] | None:
         """

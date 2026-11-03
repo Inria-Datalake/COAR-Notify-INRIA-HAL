@@ -202,7 +202,82 @@ Ensured at startup / first access from `DatabaseManager.COLLECTION_INDEXES` (all
 
 ---
 
-### 5. Blacklist Collection (`blacklist`)
+### 5. Sent Notifications Collection (`sent_notifications`)
+
+**Type**: Document Collection
+**Purpose**: Log of every outbound COAR notification attempt made by the ingestion path
+(`POST /api/document` → `send_notifications_to_hal` / `send_notifications_to_swh`), successful
+or not. One record per software name, document and target. Drives the dashboard's
+"Notifications sent" card, the "Notifications sent by target" table and the sent
+timeseries, and the `GET /notifications/sent` page / `GET /api/notifications/sent` API.
+
+#### Schema
+
+```json
+{
+  "_key": "auto-generated",
+  "_id": "sent_notifications/123456",
+  "sent_at": "2026-04-16T07:30:00.123456+00:00",
+  "target": "hal",
+  "document_id": "hal-03685380v1",
+  "software_name": "PyPDEVS",
+  "notification_id": "urn:uuid:7d2a...",
+  "notification_type": ["Offer", "coar-notify:ReviewAction"],
+  "target_inbox": "https://inbox-preprod.archives-ouvertes.fr/",
+  "payload": { "...": "the JSON-LD that was POSTed" },
+  "success": true,
+  "http_status": 202,
+  "error": null,
+  "mention_context_attributes": { "created": true, "used": true, "shared": false },
+  "filter_mode": "all"
+}
+```
+
+#### Fields
+
+| Field | Type | Description | Required |
+|-------|------|-------------|----------|
+| `sent_at` | string | ISO-8601 UTC timestamp of the attempt | Yes |
+| `target` | string | Provider the notification was sent to: `hal` or `swh` | Yes |
+| `document_id` | string | HAL identifier of the document the mention belongs to | Yes |
+| `software_name` | string \| null | Normalized software name the notification is about | No |
+| `notification_id` | string \| null | The payload's `id` (a `urn:uuid:` URN); null if the notifier could not be built | No |
+| `notification_type` | array | The payload's COAR `type` (e.g. `["Offer", "coar-notify:ReviewAction"]` for HAL, `["Announce", "coar-notify:RelationshipAction"]` for SWH) | No |
+| `target_inbox` | string \| null | Inbox URL the payload was POSTed to | No |
+| `payload` | object | The JSON-LD body as sent (empty object if never built) | Yes |
+| `success` | boolean | Transport success: the inbox answered HTTP 2xx. The author's later Accept/Reject is a separate *received* notification | Yes |
+| `http_status` | integer \| null | HTTP status returned by the inbox; null when no response (timeout, connection error, exception) | No |
+| `error` | string \| null | Failure reason (timeout, connection error, `HTTP <code>: <body>`, exception text); null on success | No |
+| `mention_context_attributes` | object | The `created` / `used` / `shared` flags that were sent | No |
+| `filter_mode` | string | Per-provider notification filter mode in force at send time (`HAL_NOTIFICATION_FILTER` / `SWH_NOTIFICATION_FILTER`) | No |
+
+#### Access
+
+- Written by `DatabaseManager.store_sent_notification`, called from
+  `notification_handler._record_sent_notification` after every send attempt (and
+  on exception). A storage failure is logged and never affects the send outcome.
+- Read by `list_sent_notifications` (newest-first, filterable by target /
+  document / success / software name), `count_sent_notifications`,
+  `get_dashboard_stats` (by-target totals) and `get_activity_timeseries`
+  (`sent` / `sent_failed` series), plus `_earliest_activity_date` for the
+  dashboard's "All time" window.
+
+#### Lifecycle
+
+- Records exist only from the version that introduced the collection; earlier
+  sends were never persisted and cannot be backfilled, so dashboard sent counts
+  start at zero on deployment.
+- Each record carries the full payload (roughly 1–3 KB for HAL, whose `object`
+  includes the mention contexts), and there are up to two records per software
+  name per document, so the collection grows faster than `documents`. No
+  retention policy is applied yet.
+- Received Accept/Reject notifications carry `inReplyTo` equal to the original
+  Offer's `id`, so a future join to this collection is a point lookup on the
+  unique `notification_id` index (not implemented yet).
+
+---
+
+### 6. Blacklist Collection (`blacklist`)
 
 **Type**: Document Collection
 **Purpose**: Persistent store of blacklisted software names. A name on this list does not block ingestion;
@@ -303,6 +378,24 @@ graph LR
 2. Notifications can be Accept or Reject actions
 3. `verification_by_author` field is updated based on response
 4. Updates are applied to all matching software records across documents
+
+### 5. Notification Sending Log
+
+```mermaid
+graph LR
+    A[POST /api/document] --> B[get_software_notifications]
+    B --> C[blacklist / quality / mode filters]
+    C --> D[POST to HAL inbox]
+    C --> E[POST to SWH inbox]
+    D --> F[sent_notifications record]
+    E --> F
+```
+
+1. After ingestion (unless `notify=false`), one notification per surviving software name is
+   built for each provider and POSTed to its inbox
+2. Every attempt is recorded in `sent_notifications` with the payload, the HTTP status and
+   any error, whether it succeeded or not
+3. The dashboard and `GET /notifications/sent` read that log; nothing is inferred any more
 
 ## Key Features
 
@@ -406,13 +499,19 @@ idempotent, so it is safe across restarts and concurrent workers.
 | `documents` | `file_hal_id` | persistent, **unique** | Prevents duplicate HAL documents at the DB level (in addition to the app-level `document_exists` check) and speeds up lookups by HAL id — including the `get_software_notifications` hot path |
 | `documents` | `created_at` | persistent | Newest-first listing (`get_latest_documents`) and the per-day documents histogram |
 | `received_notifications` | `origin` | persistent | Speeds up filtering notifications by origin (`swh` / `hal` / `unknown`) |
-| `received_notifications` | `received_at` | persistent | Speeds up the newest-first (`SORT ... DESC`) listing |
+| `received_notifications` | `received_at` | persistent | Speeds up the newest-first (`SORT ... DESC`) listing and the per-day received histogram |
+| `sent_notifications` | `sent_at` | persistent | Newest-first listing, per-day sent histogram, earliest-activity lookup |
+| `sent_notifications` | `target` | persistent | Filtering by provider (`hal` / `swh`) |
+| `sent_notifications` | `document_id` | persistent | Filtering by HAL document |
+| `sent_notifications` | `software_name` | persistent | Filtering by software name |
+| `sent_notifications` | `notification_id` | persistent, **unique** (sparse) | One record per notification URN; enables a future join with received replies (`inReplyTo`) |
 | `blacklist` | `name` | persistent, **unique** | Makes term adds idempotent and speeds membership lookups |
 | `software` | `blacklisted` | persistent | Blacklisted-mention filters/counts |
 | `software` | `quality_invalid` | persistent | Quality-invalid filters/counts |
 | `software` | `created_at` | persistent | Newest-first listing (`get_latest_mentions`) and per-day histograms |
 | `software` | `blacklisted, quality_invalid, created_at` | persistent (compound) | Combined filter-then-sort listings (latest mentions narrowed by flag) |
 | `software` | `software_name.normalizedForm` | persistent | Distinct-name counts (dashboard + mention-quality), blacklist match-count, by-name lookups |
+| `software` | `software_name.normalizedForm, blacklisted, quality_invalid` | persistent (compound, non-sparse) | Covering index for the global software distribution (`get_software_distribution`): the per-name aggregate reads only indexed fields, so no document is fetched |
 | `software` | `quality_score` | persistent | "Scored" counts for the Mention Quality Filter |
 
 The edge collection `edge_doc_to_software` needs no declared index: ArangoDB

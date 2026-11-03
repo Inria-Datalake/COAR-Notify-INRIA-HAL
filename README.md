@@ -47,8 +47,9 @@ The system consists of three main collections in ArangoDB:
 - **Software**: Contains extracted software mentions with context and confidence scores
 - **Edges**: Links documents to their software mentions for graph traversal
 
-Additional collections back the blacklist (`blacklist`) and inbound COAR notifications
-(`received_notifications`). For the full schema, indexes, and sample queries, see the
+Additional collections back the blacklist (`blacklist`), inbound COAR notifications
+(`received_notifications`) and the outbound notification log (`sent_notifications`). For the
+full schema, indexes, and sample queries, see the
 [Database Schema Documentation](docs/database.md).
 
 ## Quick Start

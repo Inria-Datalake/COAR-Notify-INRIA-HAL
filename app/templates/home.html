@@ -138,6 +138,29 @@
       border-radius: 6px;
       border: 1px solid #eee;
     }
+    .chart-wide { position: relative; }
+    .period-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+    .period-selector a {
+      display: inline-block;
+      padding: .15rem .6rem;
+      margin: 0 .25rem .25rem 0;
+      border: 1px solid #ccc;
+      border-radius: 1rem;
+      text-decoration: none;
+      color: #333;
+      font-size: .85rem;
+    }
+    .period-selector a.active {
+      background: #007bff;
+      color: #fff;
+      border-color: #007bff;
+    }
     .links {
       margin-top: 2rem;
       padding-top: 1rem;
@@ -197,7 +220,7 @@
         </div>
         <div class="stat-card">
           <div class="stat-number">{{ stats.notifications_sent_count }}</div>
-          <div class="stat-label">Notifications sent (inferred)</div>
+          <div class="stat-label">Notifications sent</div>
         </div>
       </div>
     </section>
@@ -232,7 +255,69 @@
     </section>
 
     <section>
-      <h2>Last 30 days</h2>
+      <h2>Notifications sent by target</h2>
+      <p class="section-note">
+        Outbound COAR notifications we POSTed to HAL (<strong>Offer</strong> / ReviewAction) and
+        Software Heritage (<strong>Announce</strong> / RelationshipAction), one per software name
+        and document. &ldquo;Succeeded&rdquo; means the target inbox answered 2xx; the author's
+        Accept / Reject arrives later as a received notification. Recorded since the version that
+        introduced the log, so earlier sends are not counted.
+      </p>
+      {% if stats.notifications_sent_by_target %}
+        <table class="origin-table">
+          <thead>
+            <tr><th>Target</th><th>Attempts</th><th>Succeeded</th><th>Failed</th></tr>
+          </thead>
+          <tbody>
+            {% for target, counts in stats.notifications_sent_by_target.items() %}
+              <tr>
+                <td>{{ target }}</td>
+                <td>{{ counts.total }}</td>
+                <td class="accepted">{{ counts.succeeded }}</td>
+                <td class="rejected">{{ counts.failed }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="empty">No notifications sent yet.</p>
+      {% endif %}
+    </section>
+
+    <section>
+      <h2>Software distribution</h2>
+      <p class="section-note">
+        Top {{ distribution['items'] | length }} of {{ distribution.total_names }} distinct software
+        names by number of mentions ({{ distribution.total_mentions }} mentions in total).
+        Blacklisted names are excluded{% if distribution.exclude_quality_invalid %}, as are
+        quality-filtered ones{% endif %}.
+        <a href="{{ url_for('api_software.software_distribution', limit=100) }}">JSON (top 100)</a>
+      </p>
+      {% if distribution['items'] %}
+        <div class="chart-card chart-wide"
+             style="height: {{ 26 * (distribution['items'] | length) + 70 }}px">
+          <canvas id="chart-software-distribution"></canvas>
+        </div>
+      {% else %}
+        <p class="empty">No software mentions yet.</p>
+      {% endif %}
+    </section>
+
+    <section>
+      <div class="period-row">
+        <h2>{{ period_heading }}</h2>
+        <nav class="period-selector" aria-label="Period">
+          {% for value, label in period_options %}
+            <a href="{{ url_for('home', days=value) }}"
+               class="{{ 'active' if value == selected_period }}">{{ label }}</a>
+          {% endfor %}
+        </nav>
+      </div>
+      {% if timeseries.bucket == 'week' %}
+        <p class="section-note">Each point is one week, starting on the Monday shown.</p>
+      {% elif timeseries.bucket == 'month' %}
+        <p class="section-note">Each point is one calendar month.</p>
+      {% endif %}
       <div class="chart-grid">
         <div class="chart-card"><canvas id="chart-documents"></canvas></div>
         <div class="chart-card"><canvas id="chart-software"></canvas></div>
@@ -252,6 +337,7 @@
       <a href="{{ url_for('health') }}">Health Check (JSON)</a>
       {% if status == 'up' %}
         <a href="{{ url_for('coar_inbox.show_notifications') }}">View received notifications</a>
+        <a href="{{ url_for('sent_notifications.show_sent_notifications') }}">View sent notifications</a>
       {% endif %}
       <a href="{{ url_for('blacklist_page') }}">Manage blacklist</a>
       <a href="{{ url_for('mention_quality_page') }}">Mention Quality Filter</a>
@@ -270,29 +356,46 @@
           crossorigin="anonymous"></script>
   <script>
     const series = {{ timeseries | tojson }};
-    // Show labels as M/D (e.g. 6/5) like coar-viz, derived from the YYYY-MM-DD axis.
+    const distribution = {{ distribution | tojson }};
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    // Labels derived from the YYYY-MM-DD bucket axis: "Mon YYYY" for monthly
+    // buckets, M/D like coar-viz otherwise (with the year once the window spans
+    // more than one).
     const labels = series.labels.map(d => {
-      const [, m, day] = d.split('-');
-      return `${parseInt(m, 10)}/${parseInt(day, 10)}`;
+      const [y, m, day] = d.split('-');
+      if (series.bucket === 'month') return `${MONTHS[parseInt(m, 10) - 1]} ${y}`;
+      const md = `${parseInt(m, 10)}/${parseInt(day, 10)}`;
+      return series.spans_years ? `${md}/${y}` : md;
     });
 
-    function lineChart(canvasId, title, data, color) {
+    // `extra` is an optional second dataset {label, data, color}, drawn as a
+    // plain line (no fill) on top of the main series.
+    function lineChart(canvasId, title, data, color, extra) {
       const el = document.getElementById(canvasId);
       if (!el) return;
+      const datasets = [{
+        label: title,
+        data,
+        borderColor: color,
+        backgroundColor: color + '33',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 2,
+      }];
+      if (extra) {
+        datasets.push({
+          label: extra.label,
+          data: extra.data,
+          borderColor: extra.color,
+          backgroundColor: extra.color + '33',
+          fill: false,
+          tension: 0.3,
+          pointRadius: 2,
+        });
+      }
       new Chart(el, {
         type: 'line',
-        data: {
-          labels,
-          datasets: [{
-            label: title,
-            data,
-            borderColor: color,
-            backgroundColor: color + '33',
-            fill: true,
-            tension: 0.3,
-            pointRadius: 2,
-          }],
-        },
+        data: { labels, datasets },
         options: {
           responsive: true,
           plugins: { legend: { display: true } },
@@ -301,12 +404,43 @@
       });
     }
 
+    // Horizontal bar chart; the container sets the height (one row per bar),
+    // hence maintainAspectRatio: false.
+    function barChart(canvasId, title, barLabels, data, color) {
+      const el = document.getElementById(canvasId);
+      if (!el) return;
+      new Chart(el, {
+        type: 'bar',
+        data: {
+          labels: barLabels,
+          datasets: [{
+            label: title,
+            data,
+            backgroundColor: color + 'cc',
+            borderColor: color,
+            borderWidth: 1,
+          }],
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: { x: { beginAtZero: true, ticks: { precision: 0 } } },
+        },
+      });
+    }
+
+    barChart('chart-software-distribution', 'Mentions',
+             distribution.items.map(i => i.name), distribution.items.map(i => i.count), '#fd7e14');
+
     lineChart('chart-documents', 'Documents ingested', series.documents, '#6f42c1');
     lineChart('chart-software', 'Software mentions ingested', series.software, '#fd7e14');
     lineChart('chart-blacklisted', 'Blacklisted mentions / day', series.blacklisted, '#c62828');
     lineChart('chart-model-invalid', 'Quality-filtered mentions / day', series.quality_invalid, '#b26a00');
     lineChart('chart-total', 'Notifications received', series.notifications, '#007bff');
-    lineChart('chart-sent', 'Notifications sent / day (inferred)', series.sent, '#0d9488');
+    lineChart('chart-sent', 'Notifications sent', series.sent, '#0d9488',
+              { label: 'Failed', data: series.sent_failed, color: '#c62828' });
     lineChart('chart-accepted', 'Accepted', series.accepted, '#2e7d32');
     lineChart('chart-rejected', 'Rejected', series.rejected, '#c62828');
   </script>
