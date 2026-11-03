@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>COAR Notify INRIA HAL &middot; Statistics</title>
+  <style>
+    :root {
+      --accent: #007bff;
+      --accent-dark: #0056b3;
+      --bg-soft: #f8f9fa;
+      --border: #e6e8eb;
+      --muted: #6c757d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 2rem auto;
+      line-height: 1.6;
+      max-width: 860px;
+      padding: 0 1rem;
+      color: #212529;
+    }
+    .header { border-bottom: 2px solid #eee; padding-bottom: 1rem; margin-bottom: 1.5rem; }
+    .header-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+    .header-row h1 { margin: 0; }
+    .header-row p { margin: .25rem 0 0; color: #666; }
+    .back { color: var(--accent); text-decoration: none; font-size: .9rem; }
+    .back:hover { text-decoration: underline; }
+    h2 { margin-top: 2rem; color: #495057; }
+    .section-note { color: #555; font-size: .9rem; margin: .25rem 0 1rem; }
+    .section-note a { color: var(--accent); }
+    .empty { color: #888; font-style: italic; }
+
+    .filters { margin-bottom: 1rem; }
+    .filters .group { margin-bottom: .5rem; }
+    .filters .label { font-weight: 600; margin-right: .5rem; color: #495057; font-size: .9rem; }
+    .filters a {
+      display: inline-block; padding: .15rem .7rem; margin: 0 .25rem .25rem 0;
+      border: 1px solid #ccd1d6; border-radius: 999px; text-decoration: none;
+      color: #333; font-size: .85rem; background: #fff;
+    }
+    .filters a:hover { border-color: var(--accent); color: var(--accent); }
+    .filters a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .filters .hint { color: var(--muted); font-size: .8rem; margin-left: .25rem; }
+
+    .stat-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6rem; margin: 1rem 0; }
+    .stat-card { background: var(--bg-soft); padding: .8rem .6rem; border-radius: 6px; border-left: 4px solid var(--accent); text-align: center; }
+    .stat-number { font-size: 1.5rem; font-weight: 700; color: var(--accent); line-height: 1.2; }
+    .stat-label { color: #495057; font-size: .78rem; margin-top: .25rem; }
+
+    .chart-card { position: relative; background: var(--bg-soft); padding: 1rem; border-radius: 6px; border: 1px solid #eee; }
+
+    .dist-table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    .dist-table th, .dist-table td { text-align: left; padding: .4rem .75rem; border-bottom: 1px solid #eee; }
+    .dist-table th { color: #495057; font-size: .9rem; }
+    .dist-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .dist-table td.rank { color: var(--muted); width: 3rem; }
+    .dist-table a { color: var(--accent); text-decoration: none; }
+    .dist-table a:hover { text-decoration: underline; }
+    .footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #eee; color: #999; font-size: .8rem; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-row">
+      <div>
+        <h1>Statistics</h1>
+        <p>Global software distribution across all ingested documents.</p>
+        <a class="back" href="{{ url_for('home') }}">&larr; Back to dashboard</a>
+      </div>
+    </div>
+  </div>
+
+  <main>
+    <section>
+      <h2>Software distribution</h2>
+      <p class="section-note">
+        Number of mentions per software name (normalized form), most mentioned first.
+        A name whose mentions are all excluded by the filters below does not appear and is not
+        counted in the totals.
+        <a href="{{ url_for('api_software.software_distribution', limit=100,
+                            exclude_blacklisted=distribution.exclude_blacklisted | lower,
+                            exclude_quality_invalid=distribution.exclude_quality_invalid | lower) }}">JSON (top 100)</a>
+      </p>
+
+      <div class="filters">
+        <div class="group">
+          <span class="label">Top:</span>
+          {% for n in limits %}
+            <a href="{{ url_for('statistics_page', limit=n,
+                                exclude_blacklisted=distribution.exclude_blacklisted | lower,
+                                exclude_quality_invalid=distribution.exclude_quality_invalid | lower) }}"
+               class="{{ 'active' if distribution.limit == n }}">{{ n }}</a>
+          {% endfor %}
+        </div>
+        <div class="group">
+          <span class="label">Blacklisted names:</span>
+          <a href="{{ url_for('statistics_page', limit=distribution.limit, exclude_blacklisted='true',
+                              exclude_quality_invalid=distribution.exclude_quality_invalid | lower) }}"
+             class="{{ 'active' if distribution.exclude_blacklisted }}">excluded</a>
+          <a href="{{ url_for('statistics_page', limit=distribution.limit, exclude_blacklisted='false',
+                              exclude_quality_invalid=distribution.exclude_quality_invalid | lower) }}"
+             class="{{ 'active' if not distribution.exclude_blacklisted }}">included</a>
+        </div>
+        <div class="group">
+          <span class="label">Quality-filtered names:</span>
+          <a href="{{ url_for('statistics_page', limit=distribution.limit,
+                              exclude_blacklisted=distribution.exclude_blacklisted | lower, exclude_quality_invalid='true') }}"
+             class="{{ 'active' if distribution.exclude_quality_invalid }}">excluded</a>
+          <a href="{{ url_for('statistics_page', limit=distribution.limit,
+                              exclude_blacklisted=distribution.exclude_blacklisted | lower, exclude_quality_invalid='false') }}"
+             class="{{ 'active' if not distribution.exclude_quality_invalid }}">included</a>
+          <span class="hint">(Mention Quality Filter is {{ 'on' if quality_filter_enabled else 'off' }}; the default follows it)</span>
+        </div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-number">{{ distribution.total_names }}</div>
+          <div class="stat-label">Distinct software names</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">{{ distribution.total_mentions }}</div>
+          <div class="stat-label">Mentions counted</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">{{ distribution['items'] | length }}</div>
+          <div class="stat-label">Names shown</div>
+        </div>
+      </div>
+
+      {% if distribution['items'] %}
+        <div class="chart-card" style="height: {{ 24 * (distribution['items'] | length) + 70 }}px">
+          <canvas id="chart-software-distribution"></canvas>
+        </div>
+
+        <table class="dist-table">
+          <thead>
+            <tr><th>#</th><th>Software</th><th style="text-align:right">Mentions</th><th style="text-align:right">Share</th></tr>
+          </thead>
+          <tbody>
+            {% for item in distribution['items'] %}
+              <tr>
+                <td class="rank">{{ loop.index }}</td>
+                <td><a href="{{ url_for('api_software.software_from_name', name=item.name) }}" title="Mentions of this name (JSON)">{{ item.name }}</a></td>
+                <td class="num">{{ item.count }}</td>
+                <td class="num">{{ '%.1f' | format(100 * item.count / distribution.total_mentions) if distribution.total_mentions else '0.0' }}%</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="empty">No software mentions match the current filters.</p>
+      {% endif %}
+    </section>
+  </main>
+
+  <div class="footer">COAR Notify INRIA HAL &middot; v{{ app_version }}</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"
+          integrity="sha384-vsrfeLOOY6KuIYKDlmVH5UiBmgIdB1oEf7p01YgWHuqmOHfZr374+odEv96n9tNC"
+          crossorigin="anonymous"></script>
+  <script>
+    const distribution = {{ distribution | tojson }};
+
+    // Horizontal bar chart; the container sets the height (one row per bar),
+    // hence maintainAspectRatio: false.
+    const el = document.getElementById('chart-software-distribution');
+    if (el && distribution.items.length) {
+      new Chart(el, {
+        type: 'bar',
+        data: {
+          labels: distribution.items.map(i => i.name),
+          datasets: [{
+            label: 'Mentions',
+            data: distribution.items.map(i => i.count),
+            backgroundColor: '#fd7e14cc',
+            borderColor: '#fd7e14',
+            borderWidth: 1,
+          }],
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: { x: { beginAtZero: true, ticks: { precision: 0 } } },
+        },
+      });
+    }
+  </script>
+</body>
+</html>

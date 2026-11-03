@@ -18,6 +18,11 @@ class RelationshipAnnounceNotifier:
     # Attribute annotations for static analyzers
     notification: RelationshipAnnounceSoftware
     target_inbox: str
+    # Outcome of the last send(): HTTP status (None when no response was
+    # received) and a human-readable failure reason (None on success). Lets the
+    # caller record the attempt without changing send()'s Response|None contract.
+    last_status: int | None
+    last_error: str | None
 
     def __init__(
         self,
@@ -33,6 +38,8 @@ class RelationshipAnnounceNotifier:
     ):
         self.target_inbox = target_inbox
         self.token = token
+        self.last_status = None
+        self.last_error = None
 
         # Generate a random UUID (version 4) and convert to URN
         notification_id = uuid.uuid4().urn
@@ -113,19 +120,28 @@ class RelationshipAnnounceNotifier:
 
         # Add timeout to prevent hanging
         resp = None
+        self.last_status = None
+        self.last_error = None
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=20)
+            self.last_status = resp.status_code
             resp.raise_for_status()
             return resp
         except requests.exceptions.Timeout:
+            self.last_error = f"Timeout after 20s while sending to {url}"
             logger.error(f"Timeout while sending notification to {url}")
             return None
         except requests.exceptions.ConnectionError as e:
+            self.last_error = f"Connection error: {e}"
             logger.error(f"Connection error while sending to {url}: {e}")
             return None
         except requests.HTTPError:
-            logger.error(f"HTTP error: {resp.status_code} - {resp.text}")
+            status = resp.status_code if resp is not None else None
+            body = resp.text if resp is not None else ""
+            self.last_error = f"HTTP {status}: {body[:500]}"
+            logger.error(f"HTTP error: {status} - {body}")
             return None
         except Exception as e:
+            self.last_error = f"Unexpected error: {e}"
             logger.error(f"Unexpected error while sending notification to {url}: {e}")
             return None

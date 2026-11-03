@@ -13,10 +13,11 @@
 | Method                   | Endpoint                               | Auth Required | Description                              |
 |--------------------------|----------------------------------------|---------------|------------------------------------------|
 | **Health & Status**      |
-| GET                      | `/`                                    | No            | Home page with database status           |
+| GET                      | `/`                                    | No            | Dashboard; `?days=30|90|180|365|all` selects the activity window |
 | GET                      | `/health`                              | No            | Service health check                     |
 | GET                      | `/status`                              | Yes           | Upload capability check                  |
 | GET                      | `/blacklist`                           | No            | Blacklist management web UI               |
+| GET                      | `/statistics`                          | No            | Statistics page: global software distribution (`?limit=`, `?exclude_blacklisted=`, `?exclude_quality_invalid=`) |
 | **Document Management**  |
 | GET                      | `/api/documents`                       | No            | Documents collection status              |
 | GET                      | `/api/documents/latest`                | No            | Latest ingested documents (newest first) |
@@ -28,6 +29,7 @@
 | **Software Endpoints**   |
 | GET                      | `/api/software`                        | No            | Software collection status               |
 | GET                      | `/api/software/latest`                 | No            | Latest ingested mentions (newest first); `?blacklisted=`/`?quality_invalid=` filters |
+| GET                      | `/api/software/distribution`           | No            | Mentions per software name, top N (global software distribution) |
 | GET                      | `/api/software/name/<name>`            | No            | Software by normalized name              |
 | GET                      | `/api/software/<id_mention>`           | No            | Software mention by ID                   |
 | **Mention Quality Filter** |
@@ -49,6 +51,10 @@
 | GET                      | `/notifications`                       | No            | View received notifications (HTML)       |
 | GET                      | `/api/notifications`                   | Yes           | List received notifications (JSON)       |
 | GET                      | `/api/notifications/<key>`             | Yes           | Get a received notification by key (JSON)|
+| **Sent Notifications**   |
+| GET                      | `/notifications/sent`                  | No            | View sent notifications log (HTML)       |
+| GET                      | `/api/notifications/sent`              | Yes           | List sent notifications (JSON)           |
+| GET                      | `/api/notifications/sent/<key>`        | Yes           | Get a sent notification by key (JSON)    |
 
 ## Authentication
 
@@ -240,6 +246,21 @@ curl -s -X POST \
     - Response: `{ "count", "limit", "filters": { "blacklisted", "quality_invalid" },
       "mentions": [{ "name", "created_at", "blacklisted", "quality_invalid", "quality_score", "context" }] }`
 
+### Software Distribution
+
+- **GET `/api/software/distribution`**
+    - Returns the number of mentions per normalized software name, most mentioned
+      first — the global software distribution also charted on the `/statistics` page
+    - Query Parameters:
+        - `limit`: Number of names to return (1-100, default: 20)
+        - `exclude_blacklisted`: `true`/`false` (default `true`) — leave blacklisted mentions out of the counts
+        - `exclude_quality_invalid`: `true`/`false` — leave quality-filtered mentions out; defaults to
+          the Mention Quality Filter's enabled state (`MENTION_QUALITY_FILTER_ENABLED`), so the
+          default distribution matches what is actually notifiable
+    - A name whose mentions are all excluded does not appear and is not counted in the totals
+    - Response: `{ "limit", "exclude_blacklisted", "exclude_quality_invalid",
+      "total_names", "total_mentions", "items": [{ "name", "count" }] }`
+
 ### Get Software by Normalized Name
 
 - **GET `/api/software/name/<name>`**
@@ -268,6 +289,12 @@ curl -s "http://localhost:5000/api/software/latest?limit=10&blacklisted=true" | 
 
 # Inspect the latest mentions the model flagged invalid (with their scores)
 curl -s "http://localhost:5000/api/software/latest?limit=10&quality_invalid=true" | jq
+
+# Global software distribution (top 20, blacklisted excluded)
+curl "http://localhost:5000/api/software/distribution"
+
+# Top 50 including blacklisted names
+curl "http://localhost:5000/api/software/distribution?limit=50&exclude_blacklisted=false"
 
 # Get software by normalized name
 curl -s http://localhost:5000/api/software/name/python | jq
@@ -449,6 +476,11 @@ The COAR Notify inbox handles bidirectional communication for software mention v
 - **GET `/notifications`**
     - Renders an HTML page displaying all received notifications
     - Useful for debugging and inspection during development
+    - Each row with a software name has a **Blacklist** button (or a *Blacklisted*
+      badge when the name is already listed). The button opens a confirmation
+      dialog and then calls `POST /api/blacklist` with the name shown, which is
+      the mention's normalized form. Mentions already stored are flagged only
+      after *Reapply* on the `/blacklist` page.
 
 ### List Received Notifications (JSON)
 
@@ -463,6 +495,36 @@ The COAR Notify inbox handles bidirectional communication for software mention v
 ### Get a Received Notification by Key (JSON)
 
 - **GET `/api/notifications/<key>`** — requires `x-api-key`
+    - `<key>` is the `_key` returned by the list endpoint
+    - Returns the single record, or 404 if not found
+
+### View Sent Notifications
+
+- **GET `/notifications/sent`**
+    - Renders an HTML table of the outbound notification log (every attempt the
+      ingestion path made to HAL / Software Heritage, newest first, 200 at most)
+    - Query params: `target` (`hal` | `swh`), `status` (`succeeded` | `failed`);
+      invalid values are ignored
+
+### List Sent Notifications (JSON)
+
+- **GET `/api/notifications/sent`** — requires `x-api-key`
+    - Returns recent sent-notification records as JSON, newest first
+    - Query params:
+        - `limit` — max records to return (1–1000, default 100)
+        - `target` — optional filter, `hal` or `swh` (any other value → 400)
+        - `document_id` — optional exact-match filter on the HAL document id
+        - `software_name` — optional exact-match filter on the normalized software name
+        - `success` — optional `true`/`false` filter on the transport outcome (HTTP 2xx)
+    - Response: `{ "count", "limit", "filters": { "target", "document_id", "software_name", "success" }, "notifications": [ ... ] }`
+    - Each record: `{ "_key", "sent_at", "target", "document_id", "software_name", "notification_id",
+      "notification_type", "target_inbox", "payload", "success", "http_status", "error",
+      "mention_context_attributes", "filter_mode" }` (see
+      [Database Schema](database.md#5-sent-notifications-collection-sent_notifications))
+
+### Get a Sent Notification by Key (JSON)
+
+- **GET `/api/notifications/sent/<key>`** — requires `x-api-key`
     - `<key>` is the `_key` returned by the list endpoint
     - Returns the single record, or 404 if not found
 
@@ -510,6 +572,21 @@ curl -s -H "x-api-key: $API_TOKEN" \
 # Fetch a single notification by its storage key
 curl -s -H "x-api-key: $API_TOKEN" \
   http://localhost:5000/api/notifications/106031488 | jq
+
+# View the sent-notification log in browser
+# http://localhost:5000/notifications/sent
+
+# List sent notifications as JSON (requires API key)
+curl -s -H "x-api-key: $API_TOKEN" \
+  "http://localhost:5000/api/notifications/sent?limit=20" | jq
+
+# Failed attempts to Software Heritage only
+curl -s -H "x-api-key: $API_TOKEN" \
+  "http://localhost:5000/api/notifications/sent?target=swh&success=false" | jq
+
+# Everything sent for one document
+curl -s -H "x-api-key: $API_TOKEN" \
+  "http://localhost:5000/api/notifications/sent?document_id=hal-03685380v1" | jq
 ```
 
 **Supported Notification Types:**

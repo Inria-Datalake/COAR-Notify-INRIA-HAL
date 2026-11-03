@@ -6,6 +6,7 @@ from typing import Any
 from flask import Blueprint, jsonify, render_template, request
 
 from app.auth import require_api_key
+from app.utils.blacklist_manager import blacklist_manager
 from app.utils.db import get_db
 from app.utils.notification_handler import (
     accept_notification,
@@ -320,9 +321,14 @@ def show_notifications():
         has_comment=has_comment,
     )
     rows = [summarize_received_notification(r) for r in records]
+    # Names already blacklisted get a badge instead of the "Blacklist" button.
+    # The citation name is the mention's normalizedForm, which is what the
+    # blacklist matches on, so an exact lookup is the right test.
+    blacklisted_terms = blacklist_manager.get_blacklist()
     return render_template(
         "notifications.html",
         rows=rows,
+        blacklisted_terms=blacklisted_terms,
         origins=PAGE_ORIGINS,
         filters={k: v[0] for k, v in PAGE_FILTERS.items()},
         selected_origin=origin,

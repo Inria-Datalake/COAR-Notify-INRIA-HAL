@@ -2,19 +2,18 @@ import logging
 import os
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app import __version__
+from app.routes._args import parse_bool_arg
 from app.routes.api_documents import api_documents_bp
 from app.routes.api_software import api_software_bp
 from app.routes.api_status import api_status_bp
 from app.routes.coar_inbox import coar_inbox_bp
+from app.routes.sent_notifications import sent_notifications_bp
 from app.utils.db import env_with_legacy, get_db, init_db
-from app.utils.notification_handler import (
-    infer_sent_notification_count,
-    is_quality_filter_enabled,
-)
+from app.utils.notification_handler import is_quality_filter_enabled
 
 load_dotenv()
 
@@ -61,6 +60,7 @@ app.register_blueprint(api_documents_bp)
 app.register_blueprint(api_software_bp)
 app.register_blueprint(api_status_bp)
 app.register_blueprint(coar_inbox_bp)
+app.register_blueprint(sent_notifications_bp)
 
 db_manager = init_db(app)
 
@@ -83,15 +83,41 @@ try:
 except Exception as e:
     print(f"Blacklist: failed to seed from CSV: {e}")
 
-# Ensure the persistent indexes on `software` and `documents` exist (blacklist /
-# quality flags, created_at, and normalizedForm drive the dashboard/stats/latest
-# queries). Creation is idempotent; doing it at startup means simply booting the
-# app provisions them, rather than waiting for the next ingestion.
-for _coll in ("software", "documents"):
+# Ensure the collections the dashboard queries and their persistent indexes
+# exist (blacklist / quality flags, created_at and normalizedForm on `software`
+# and `documents`; the timestamp / target / unique notification_id indexes on
+# the two notification logs). Creation is idempotent; doing it at startup means
+# simply booting the app provisions them, rather than waiting for the next
+# ingestion or send, and keeps the dashboard's counts from hitting a missing
+# collection on a cold database.
+for _coll in ("software", "documents", "received_notifications", "sent_notifications"):
     try:
         db_manager.check_or_create_collection(_coll)
     except Exception as e:
         print(f"{_coll} indexes: failed to ensure: {e}")
+
+
+# Activity-chart periods selectable on the dashboard (?days=...): the value used
+# in the URL, its button label, and the window length (None = all history).
+PERIOD_OPTIONS: list[tuple[str, str]] = [
+    ("30", "30 days"),
+    ("90", "90 days"),
+    ("180", "180 days"),
+    ("365", "1 year"),
+    ("all", "All"),
+]
+PERIOD_DAYS: dict[str, int | None] = {"30": 30, "90": 90, "180": 180, "365": 365, "all": None}
+DEFAULT_PERIOD = "30"
+_BUCKET_WORD = {"day": "daily", "week": "weekly", "month": "monthly"}
+
+# Top-N choices offered on the statistics page (?limit=), and its default.
+DISTRIBUTION_LIMITS = (10, 20, 50, 100)
+DISTRIBUTION_DEFAULT_LIMIT = 20
+
+
+def _parse_period(raw: str | None) -> str:
+    """Whitelist the ``?days=`` value; anything unknown falls back to the default."""
+    return raw if raw in PERIOD_DAYS else DEFAULT_PERIOD
 
 
 @app.get("/")
@@ -100,16 +126,14 @@ def home():
         db_manager = get_db()
         connection_info = db_manager.get_connection_info()
         stats = db_manager.get_dashboard_stats()
-        quality_enabled = is_quality_filter_enabled()
-        timeseries = db_manager.get_activity_timeseries(days=30, quality_enabled=quality_enabled)
 
-        # Sent notifications are not persisted; infer the count as distinct software
-        # names minus the blacklisted-or-quality-filtered ones. Reuses the already
-        # computed distinct-software total. Done in the route rather than
-        # get_dashboard_stats to keep the DB layer free of the Flask-config coupling.
-        stats["notifications_sent_count"] = infer_sent_notification_count(
-            stats["distinct_software_count"]
-        )
+        period = _parse_period(request.args.get("days"))
+        timeseries = db_manager.get_activity_timeseries(days=PERIOD_DAYS[period])
+        bucket_word = _BUCKET_WORD.get(timeseries["bucket"], timeseries["bucket"])
+        if period == "all":
+            period_heading = f"All time since {timeseries['since']} ({bucket_word})"
+        else:
+            period_heading = f"Last {period} days ({bucket_word})"
 
         return render_template(
             "home.html",
@@ -117,6 +141,45 @@ def home():
             error=connection_info.get("error"),
             stats=stats,
             timeseries=timeseries,
+            period_options=PERIOD_OPTIONS,
+            selected_period=period,
+            period_heading=period_heading,
+        )
+    except Exception as e:
+        return render_template("error.html", error=str(e))
+
+
+@app.get("/statistics")
+def statistics_page():
+    """
+    Statistics page: the global software distribution (mentions per software
+    name, most mentioned first). ``?limit=`` picks the top-N size (one of
+    DISTRIBUTION_LIMITS), ``?exclude_blacklisted=`` and
+    ``?exclude_quality_invalid=`` (true/false) control the exclusions. The
+    defaults mirror the send path: blacklisted names never go out, and
+    quality-invalid ones only when the Mention Quality Filter is off.
+    """
+    try:
+        limit = request.args.get("limit", type=int)
+        if limit not in DISTRIBUTION_LIMITS:
+            limit = DISTRIBUTION_DEFAULT_LIMIT
+        exclude_blacklisted = parse_bool_arg("exclude_blacklisted")
+        if exclude_blacklisted is None:
+            exclude_blacklisted = True
+        exclude_quality_invalid = parse_bool_arg("exclude_quality_invalid")
+        if exclude_quality_invalid is None:
+            exclude_quality_invalid = is_quality_filter_enabled()
+
+        distribution = get_db().get_software_distribution(
+            limit=limit,
+            exclude_blacklisted=exclude_blacklisted,
+            exclude_quality_invalid=exclude_quality_invalid,
+        )
+        return render_template(
+            "statistics.html",
+            distribution=distribution,
+            limits=DISTRIBUTION_LIMITS,
+            quality_filter_enabled=is_quality_filter_enabled(),
         )
     except Exception as e:
         return render_template("error.html", error=str(e))

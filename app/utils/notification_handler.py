@@ -145,32 +145,6 @@ def is_quality_filter_enabled() -> bool:
     )
 
 
-def infer_sent_notification_count(distinct_total: int) -> int:
-    """
-    Estimate how many outbound COAR notifications were sent.
-
-    Sent notifications are not persisted, so this estimates them from the distinct
-    software names: ``distinct_total`` minus the names that are blacklisted **or**
-    quality-filtered (the exclusion set from
-    ``DatabaseManager.count_distinct_unnotifiable_software``). ``distinct_total``
-    is the dashboard's already-computed distinct-software count, reused here so we
-    don't scan for it twice.
-
-    It is an approximation: it counts a software name once regardless of how many
-    documents mention it, and it does not model the per-provider created/used/
-    shared mode filters (no-ops under the default ``all`` modes). On failure the
-    excluded count is 0, so the estimate degrades to ``distinct_total``.
-    """
-    try:
-        excluded = get_db().count_distinct_unnotifiable_software(
-            quality_enabled=is_quality_filter_enabled()
-        )
-    except Exception as e:
-        logger.error(f"Failed to infer sent-notification count: {e}")
-        excluded = 0
-    return max(distinct_total - excluded, 0)
-
-
 class NotificationType(Enum):
     """Enumeration of notification types."""
 
@@ -359,6 +333,42 @@ def get_notification_config_for_provider(provider: ProviderType) -> dict[str, st
     return config
 
 
+def _record_sent_notification(
+    notifier: ActionReviewNotifier | RelationshipAnnounceNotifier | None,
+    *,
+    target: str,
+    document_id: str,
+    software_name: str | None,
+    mention_context_attributes: dict[str, bool],
+    filter_mode: str,
+    success: bool,
+    error: str | None = None,
+) -> None:
+    """
+    Persist the outcome of one send attempt in ``sent_notifications``.
+
+    ``notifier`` is None when it could not even be constructed; the record then
+    has no payload. ``error`` overrides the notifier's own ``last_error`` (used
+    for exceptions raised outside ``send()``). Wrapped so a database problem can
+    never turn a successful send into a reported failure or abort the loop.
+    """
+    try:
+        get_db().store_sent_notification(
+            target=target,
+            document_id=document_id,
+            software_name=software_name,
+            payload=notifier.notification.to_jsonld() if notifier else {},
+            target_inbox=notifier.target_inbox if notifier else None,
+            success=success,
+            http_status=notifier.last_status if notifier else None,
+            error=error if error is not None else (notifier.last_error if notifier else None),
+            mention_context_attributes=mention_context_attributes,
+            filter_mode=filter_mode,
+        )
+    except Exception as e:
+        logger.error(f"Failed to record sent {target} notification for {software_name}: {e}")
+
+
 def send_notifications_to_swh(document_id: str, notifications=None) -> dict[str, Any]:
     """
     Send COAR notifications specifically to Software Heritage for software mentions.
@@ -417,6 +427,12 @@ def send_notifications_to_swh(document_id: str, notifications=None) -> dict[str,
 
         for notification in notifications:
             software_name = notification.get("softwareName")
+            context_attrs = {
+                "created": bool(notification.get("created")),
+                "used": bool(notification.get("used")),
+                "shared": bool(notification.get("shared")),
+            }
+            notifier: RelationshipAnnounceNotifier | None = None
             try:
                 notifier = RelationshipAnnounceNotifier(
                     document_id,
@@ -426,16 +442,13 @@ def send_notifications_to_swh(document_id: str, notifications=None) -> dict[str,
                     software_name=software_name,
                     target_id="https://www.softwareheritage.org",
                     target_inbox=config["inbox_url"],
-                    mention_context_attributes={
-                        "created": bool(notification.get("created")),
-                        "used": bool(notification.get("used")),
-                        "shared": bool(notification.get("shared")),
-                    },
+                    mention_context_attributes=context_attrs,
                     token=config["token"],
                 )
                 response = notifier.send()
 
-                if response and 200 <= response.status_code < 300:
+                success = bool(response) and 200 <= response.status_code < 300
+                if success:
                     success_count += 1
                     logger.debug(
                         f"Successfully sent SWH notification for software: {software_name}"
@@ -446,11 +459,30 @@ def send_notifications_to_swh(document_id: str, notifications=None) -> dict[str,
                     logger.error(
                         f"Failed to send SWH notification for software {software_name}: HTTP {status}"
                     )
+                _record_sent_notification(
+                    notifier,
+                    target="swh",
+                    document_id=document_id,
+                    software_name=software_name,
+                    mention_context_attributes=context_attrs,
+                    filter_mode=filter_mode,
+                    success=success,
+                )
 
             except Exception as e:
                 failure_count += 1
                 logger.error(
                     f"Exception processing SWH notification for software {software_name}: {e}"
+                )
+                _record_sent_notification(
+                    notifier,
+                    target="swh",
+                    document_id=document_id,
+                    software_name=software_name,
+                    mention_context_attributes=context_attrs,
+                    filter_mode=filter_mode,
+                    success=False,
+                    error=str(e),
                 )
 
         total_count = len(notifications)
@@ -531,6 +563,12 @@ def send_notifications_to_hal(document_id: str, notifications=None) -> dict[str,
 
         for notification in notifications:
             software_name = notification.get("softwareName", "Unknown software")
+            context_attrs = {
+                "created": bool(notification.get("created")),
+                "used": bool(notification.get("used")),
+                "shared": bool(notification.get("shared")),
+            }
+            notifier: ActionReviewNotifier | None = None
             try:
                 notifier = ActionReviewNotifier(
                     document_id,
@@ -541,17 +579,14 @@ def send_notifications_to_hal(document_id: str, notifications=None) -> dict[str,
                     software_repo=None,
                     mention_type="software",
                     mention_context=notification.get("contexts", []),
-                    mention_context_attributes={
-                        "created": bool(notification.get("created")),
-                        "used": bool(notification.get("used")),
-                        "shared": bool(notification.get("shared")),
-                    },
+                    mention_context_attributes=context_attrs,
                     target_id=config["base_url"],
                     target_inbox=config["inbox_url"],
                     token=config["token"],
                 )
                 response = notifier.send()
-                if response and 200 <= response.status_code < 300:
+                success = bool(response) and 200 <= response.status_code < 300
+                if success:
                     success_count += 1
                     logger.debug(
                         f"Successfully sent HAL notification for software: {software_name}"
@@ -562,11 +597,30 @@ def send_notifications_to_hal(document_id: str, notifications=None) -> dict[str,
                     logger.error(
                         f"Failed to send HAL notification for software {software_name}: HTTP {status}"
                     )
+                _record_sent_notification(
+                    notifier,
+                    target="hal",
+                    document_id=document_id,
+                    software_name=software_name,
+                    mention_context_attributes=context_attrs,
+                    filter_mode=filter_mode,
+                    success=success,
+                )
 
             except Exception as e:
                 failure_count += 1
                 logger.error(
                     f"Exception processing HAL notification for software {software_name}: {e}"
+                )
+                _record_sent_notification(
+                    notifier,
+                    target="hal",
+                    document_id=document_id,
+                    software_name=software_name,
+                    mention_context_attributes=context_attrs,
+                    filter_mode=filter_mode,
+                    success=False,
+                    error=str(e),
                 )
 
         total_count = len(notifications)

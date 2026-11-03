@@ -73,6 +73,42 @@
       max-height: 420px; max-width: 70vw; overflow: auto;
     }
     .footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #eee; color: #999; font-size: .8rem; }
+
+    .btn-blacklist {
+      font: inherit; font-size: .8rem; padding: .2rem .6rem; border-radius: 999px; cursor: pointer;
+      border: 1px solid var(--danger); color: var(--danger); background: #fff; white-space: nowrap;
+    }
+    .btn-blacklist:hover { background: var(--danger); color: #fff; }
+    .btn-blacklist:disabled { opacity: .5; cursor: default; }
+    .badge-blacklisted {
+      display: inline-block; font-size: .75rem; padding: .15rem .55rem; border-radius: 999px;
+      background: #fdecea; color: var(--danger); border: 1px solid #f5c6c2; white-space: nowrap;
+    }
+
+    dialog#confirm-blacklist {
+      border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem 1.5rem;
+      max-width: 28rem; width: calc(100vw - 2rem); box-shadow: 0 10px 30px rgba(0,0,0,.2);
+    }
+    dialog#confirm-blacklist::backdrop { background: rgba(0,0,0,.4); }
+    dialog#confirm-blacklist h2 { margin: 0 0 .5rem; font-size: 1.1rem; }
+    dialog#confirm-blacklist p { margin: .4rem 0; font-size: .95rem; }
+    dialog#confirm-blacklist code {
+      background: var(--bg-soft); border: 1px solid var(--border); border-radius: 4px; padding: .05rem .35rem;
+    }
+    dialog#confirm-blacklist .hint { color: var(--muted); font-size: .85rem; }
+    dialog#confirm-blacklist .hint a { color: var(--accent); }
+    dialog#confirm-blacklist .actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
+    dialog#confirm-blacklist button {
+      font: inherit; font-size: .9rem; padding: .35rem .9rem; border-radius: 6px; cursor: pointer; border: 1px solid #ccd1d6; background: #fff;
+    }
+    dialog#confirm-blacklist button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+    dialog#confirm-blacklist button:disabled { opacity: .6; cursor: default; }
+
+    #toasts { position: fixed; bottom: 1rem; right: 1rem; display: flex; flex-direction: column; gap: .5rem; z-index: 50; }
+    .toast { padding: .6rem .9rem; border-radius: 6px; color: #fff; font-size: .9rem; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+    .toast.ok { background: var(--ok); }
+    .toast.err { background: var(--danger); }
+    .toast.info { background: #37474f; }
   </style>
 </head>
 <body>
@@ -126,6 +162,7 @@
             <th>Decision</th>
             <th>Comment</th>
             <th>Raw</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -152,6 +189,16 @@
                   <pre>{{ row.payload | tojson(indent=2) }}</pre>
                 </details>
               </td>
+              <td data-software="{{ row.software or '' }}">
+                {% if not row.software %}
+                  <span class="none">&mdash;</span>
+                {% elif row.software in blacklisted_terms %}
+                  <span class="badge-blacklisted" title="This name is already on the blacklist">Blacklisted</span>
+                {% else %}
+                  <button type="button" class="btn-blacklist" data-term="{{ row.software }}"
+                          title="Add this software name to the blacklist">Blacklist</button>
+                {% endif %}
+              </td>
             </tr>
           {% endfor %}
         </tbody>
@@ -160,5 +207,89 @@
   </main>
 
   <div class="footer">COAR Notify INRIA HAL &middot; v{{ app_version }}</div>
+
+  <dialog id="confirm-blacklist">
+    <h2>Add to blacklist?</h2>
+    <p>The software name <code id="confirm-term"></code> will be added to the blacklist.</p>
+    <p class="hint">
+      New mentions of this name will be flagged and no longer announced. Mentions already stored keep
+      their current flag until you run <em>Reapply</em> on the
+      <a href="{{ url_for('blacklist_page') }}" target="_blank" rel="noopener">blacklist page</a>.
+    </p>
+    <div class="actions">
+      <button type="button" id="confirm-cancel">Cancel</button>
+      <button type="button" id="confirm-ok" class="danger">Add to blacklist</button>
+    </div>
+  </dialog>
+  <div id="toasts"></div>
+
+  <script>
+    const ADD_URL = "{{ url_for('api_software.add_to_blacklist') }}";
+    const dialog = document.getElementById('confirm-blacklist');
+    const termEl = document.getElementById('confirm-term');
+    const okBtn = document.getElementById('confirm-ok');
+    const cancelBtn = document.getElementById('confirm-cancel');
+    let pendingTerm = null;
+
+    function toast(message, kind = 'info') {
+      const el = document.createElement('div');
+      el.className = `toast ${kind}`;
+      el.textContent = message;
+      document.getElementById('toasts').appendChild(el);
+      setTimeout(() => el.remove(), 3500);
+    }
+
+    // Every row carrying the same name flips to the badge, not just the one clicked.
+    function markBlacklisted(term) {
+      document.querySelectorAll('td[data-software]').forEach(td => {
+        if (td.dataset.software !== term) return;
+        const badge = document.createElement('span');
+        badge.className = 'badge-blacklisted';
+        badge.title = 'This name is already on the blacklist';
+        badge.textContent = 'Blacklisted';
+        td.replaceChildren(badge);
+      });
+    }
+
+    document.querySelectorAll('.btn-blacklist').forEach(btn => {
+      btn.addEventListener('click', () => {
+        pendingTerm = btn.dataset.term;
+        termEl.textContent = pendingTerm;
+        okBtn.disabled = false;
+        dialog.showModal();
+      });
+    });
+
+    cancelBtn.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('close', () => { pendingTerm = null; });
+
+    okBtn.addEventListener('click', async () => {
+      const term = pendingTerm;
+      if (!term) { dialog.close(); return; }
+      okBtn.disabled = true;
+      try {
+        const res = await fetch(ADD_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ term }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 201) {
+          toast(`Added "${term}" to the blacklist.`, 'ok');
+          markBlacklisted(term);
+        } else if (res.status === 409) {
+          toast(`"${term}" is already blacklisted.`, 'info');
+          markBlacklisted(term);
+        } else {
+          toast(data.error || data.message || `Failed to add "${term}".`, 'err');
+        }
+      } catch (err) {
+        toast(`Error: ${err}`, 'err');
+      } finally {
+        okBtn.disabled = false;
+        dialog.close();
+      }
+    });
+  </script>
 </body>
 </html>
