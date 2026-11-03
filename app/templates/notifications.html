@@ -1,67 +1,157 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
-    <title>Received Notifications</title>
-    <style>
-        body { font-family: system-ui, sans-serif; margin: 2rem; }
-        .filters { margin-bottom: 1.5rem; }
-        .filters .group { margin-bottom: .5rem; }
-        .filters .label { font-weight: bold; margin-right: .5rem; }
-        .filters a {
-            display: inline-block; padding: .15rem .6rem; margin: 0 .25rem .25rem 0;
-            border: 1px solid #ccc; border-radius: 1rem; text-decoration: none;
-            color: #333; font-size: .85rem;
-        }
-        .filters a.active { background: #2a6; color: #fff; border-color: #2a6; }
-        .count { color: #666; font-size: .9rem; margin-bottom: 1rem; }
-        ul { list-style: none; padding: 0; }
-        li { border: 1px solid #eee; border-radius: .5rem; padding: 1rem; margin-bottom: 1rem; }
-        pre { background: #f7f7f7; padding: .75rem; border-radius: .25rem; overflow-x: auto; }
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>COAR Notify INRIA HAL &middot; Received Notifications</title>
+  <style>
+    :root {
+      --accent: #007bff;
+      --accent-dark: #0056b3;
+      --bg-soft: #f8f9fa;
+      --border: #e6e8eb;
+      --danger: #c62828;
+      --ok: #2e7d32;
+      --muted: #6c757d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 2rem auto;
+      line-height: 1.5;
+      max-width: 1100px;
+      padding: 0 1rem;
+      color: #212529;
+    }
+    .header { border-bottom: 2px solid #eee; padding-bottom: 1rem; margin-bottom: 1.5rem; }
+    .header-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+    .header-row h1 { margin: 0; }
+    .header-row p { margin: .25rem 0 0; color: #666; }
+    .back { color: var(--accent); text-decoration: none; font-size: .9rem; }
+    .back:hover { text-decoration: underline; }
+
+    .filters { margin-bottom: 1rem; }
+    .filters .group { margin-bottom: .5rem; }
+    .filters .label { font-weight: 600; margin-right: .5rem; color: #495057; font-size: .9rem; }
+    .filters a {
+      display: inline-block; padding: .15rem .7rem; margin: 0 .25rem .25rem 0;
+      border: 1px solid #ccd1d6; border-radius: 999px; text-decoration: none;
+      color: #333; font-size: .85rem; background: #fff;
+    }
+    .filters a:hover { border-color: var(--accent); color: var(--accent); }
+    .filters a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .count { color: var(--muted); font-size: .9rem; margin-bottom: 1rem; }
+    .empty { color: #888; font-style: italic; }
+
+    .notif-table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    .notif-table th, .notif-table td {
+      text-align: left; vertical-align: top;
+      padding: .5rem .75rem; border-bottom: 1px solid #eee;
+    }
+    .notif-table th { color: #495057; font-size: .9rem; white-space: nowrap; }
+    .notif-table tbody tr:hover { background: #f4f8ff; }
+    .notif-table td.date { white-space: nowrap; font-size: .9rem; color: #495057; }
+    .notif-table td.origin { text-transform: uppercase; font-size: .8rem; letter-spacing: .03em; color: #495057; }
+    .notif-table td.accepted { color: var(--ok); font-weight: 600; }
+    .notif-table td.rejected { color: var(--danger); font-weight: 600; }
+    .notif-table td.other { color: var(--muted); font-size: .85rem; }
+    .notif-table td.comment { max-width: 28rem; white-space: pre-wrap; word-break: break-word; }
+    .notif-table .doc { font-size: .8rem; color: var(--accent); text-decoration: none; word-break: break-all; }
+    .notif-table .doc:hover { text-decoration: underline; }
+    .notif-table .none { color: #adb5bd; }
+
+    details summary {
+      cursor: pointer; color: var(--accent); font-size: .85rem; user-select: none; white-space: nowrap;
+    }
+    details summary:hover { text-decoration: underline; }
+    details[open] summary { margin-bottom: .5rem; }
+    details pre {
+      background: var(--bg-soft); border: 1px solid var(--border); border-radius: 6px;
+      padding: .75rem; margin: 0; font-size: .78rem; line-height: 1.4;
+      max-height: 420px; max-width: 70vw; overflow: auto;
+    }
+    .footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #eee; color: #999; font-size: .8rem; }
+  </style>
 </head>
 <body>
-    <h1>Received COAR Notifications</h1>
+  <div class="header">
+    <div class="header-row">
+      <div>
+        <h1>Received COAR Notifications</h1>
+        <p>Author decisions (Accept / Reject) on the software mentions we announced, newest first.</p>
+        <a class="back" href="{{ url_for('home') }}">&larr; Back to dashboard</a>
+      </div>
+    </div>
+  </div>
 
+  <main>
     <div class="filters">
-        <div class="group">
-            <span class="label">Origin:</span>
-            <a href="{{ url_for('coar_inbox.show_notifications', type=selected_type) }}"
-               class="{{ 'active' if not selected_origin }}">All</a>
-            {% for o in origins %}
-                <a href="{{ url_for('coar_inbox.show_notifications', origin=o, type=selected_type) }}"
-                   class="{{ 'active' if selected_origin == o }}">{{ o }}</a>
-            {% endfor %}
-        </div>
-        <div class="group">
-            <span class="label">Type:</span>
-            <a href="{{ url_for('coar_inbox.show_notifications', origin=selected_origin) }}"
-               class="{{ 'active' if not selected_type }}">All</a>
-            {% for t in types %}
-                <a href="{{ url_for('coar_inbox.show_notifications', origin=selected_origin, type=t) }}"
-                   class="{{ 'active' if selected_type == t }}">{{ t }}</a>
-            {% endfor %}
-        </div>
+      <div class="group">
+        <span class="label">Origin:</span>
+        <a href="{{ url_for('coar_inbox.show_notifications', show=selected_show) }}"
+           class="{{ 'active' if not selected_origin }}">All</a>
+        {% for o in origins %}
+          <a href="{{ url_for('coar_inbox.show_notifications', origin=o, show=selected_show) }}"
+             class="{{ 'active' if selected_origin == o }}">{{ o }}</a>
+        {% endfor %}
+      </div>
+      <div class="group">
+        <span class="label">Show:</span>
+        <a href="{{ url_for('coar_inbox.show_notifications', origin=selected_origin) }}"
+           class="{{ 'active' if not selected_show }}">All</a>
+        {% for key, label in filters.items() %}
+          <a href="{{ url_for('coar_inbox.show_notifications', origin=selected_origin, show=key) }}"
+             class="{{ 'active' if selected_show == key }}">{{ label }}</a>
+        {% endfor %}
+      </div>
     </div>
 
     <p class="count">
-        {{ records | length }} notification{{ '' if records | length == 1 else 's' }}
-        {% if selected_origin %}from <strong>{{ selected_origin }}</strong>{% endif %}
-        {% if selected_type %}of type <strong>{{ selected_type }}</strong>{% endif %}
+      {{ rows | length }} notification{{ '' if rows | length == 1 else 's' }}
+      {% if selected_origin %}from <strong>{{ selected_origin }}</strong>{% endif %}
+      {% if selected_show %}&middot; <strong>{{ filters[selected_show] | lower }}</strong>{% endif %}
     </p>
 
-    {% if not records %}
-        <p><em>No notifications match the current filter.</em></p>
+    {% if not rows %}
+      <p class="empty">No notifications match the current filter.</p>
+    {% else %}
+      <table class="notif-table">
+        <thead>
+          <tr>
+            <th>Origin</th>
+            <th>Date</th>
+            <th>Software</th>
+            <th>Decision</th>
+            <th>Comment</th>
+            <th>Raw</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              <td class="origin">{{ row.origin }}</td>
+              <td class="date">{{ row.received_at }}</td>
+              <td>
+                {% if row.software %}<strong>{{ row.software }}</strong>{% else %}<span class="none">&mdash;</span>{% endif %}
+                {% if row.document_id %}
+                  <br><a class="doc" href="{{ row.document_url }}" target="_blank" rel="noopener">{{ row.document_id }}</a>
+                {% endif %}
+              </td>
+              <td class="{{ row.decision }}">{{ row.decision_label }}</td>
+              <td class="comment">{% if row.comment %}{{ row.comment }}{% else %}<span class="none">&mdash;</span>{% endif %}</td>
+              <td>
+                <details>
+                  <summary>Raw</summary>
+                  <pre>{{ row.payload | tojson(indent=2) }}</pre>
+                </details>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     {% endif %}
-    <ul>
-        {% for record in records %}
-            <li>
-                <strong>Received at:</strong> {{ record.received_at }}<br>
-                <strong>Origin:</strong> {{ record.origin or 'N/A' }}<br>
-                <strong>Type:</strong> {{ record.payload.type }}<br>
-                <strong>Actor:</strong> {{ record.payload.actor.id if record.payload.actor else 'N/A' }}<br>
-                <pre>{{ record.payload | tojson(indent=2) }}</pre>
-            </li>
-        {% endfor %}
-    </ul>
+  </main>
+
+  <div class="footer">COAR Notify INRIA HAL &middot; v{{ app_version }}</div>
 </body>
 </html>
