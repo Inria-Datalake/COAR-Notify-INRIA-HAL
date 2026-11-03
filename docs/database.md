@@ -500,7 +500,8 @@ idempotent, so it is safe across restarts and concurrent workers.
 | `documents` | `created_at` | persistent | Newest-first listing (`get_latest_documents`) and the per-day documents histogram |
 | `received_notifications` | `origin` | persistent | Speeds up filtering notifications by origin (`swh` / `hal` / `unknown`) |
 | `received_notifications` | `received_at` | persistent | Speeds up the newest-first (`SORT ... DESC`) listing and the per-day received histogram |
-| `sent_notifications` | `sent_at` | persistent | Newest-first listing, per-day sent histogram, earliest-activity lookup |
+| `sent_notifications` | `sent_at` | persistent | Newest-first listing, earliest-activity lookup |
+| `sent_notifications` | `sent_at, success` | persistent (compound, non-sparse) | Covering index for the dashboard's per-day sent / failed series |
 | `sent_notifications` | `target` | persistent | Filtering by provider (`hal` / `swh`) |
 | `sent_notifications` | `document_id` | persistent | Filtering by HAL document |
 | `sent_notifications` | `software_name` | persistent | Filtering by software name |
@@ -510,6 +511,7 @@ idempotent, so it is safe across restarts and concurrent workers.
 | `software` | `quality_invalid` | persistent | Quality-invalid filters/counts |
 | `software` | `created_at` | persistent | Newest-first listing (`get_latest_mentions`) and per-day histograms |
 | `software` | `blacklisted, quality_invalid, created_at` | persistent (compound) | Combined filter-then-sort listings (latest mentions narrowed by flag) |
+| `software` | `created_at, blacklisted, quality_invalid` | persistent (compound, non-sparse) | Covering index for the dashboard's per-day software / blacklisted / quality-filtered series (`get_activity_timeseries`): a `created_at` range scan that reads only the flags, so no document is fetched even for the "All time" window. Non-sparse because older mentions have null flags |
 | `software` | `software_name.normalizedForm` | persistent | Distinct-name counts (dashboard + mention-quality), blacklist match-count, by-name lookups |
 | `software` | `software_name.normalizedForm, blacklisted, quality_invalid` | persistent (compound, non-sparse) | Covering index for the global software distribution (`get_software_distribution`, the `/statistics` page): the per-name aggregate reads only indexed fields, so no document is fetched |
 | `software` | `quality_score` | persistent | "Scored" counts for the Mention Quality Filter |

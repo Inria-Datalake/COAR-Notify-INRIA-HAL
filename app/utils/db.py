@@ -103,6 +103,10 @@ class DatabaseManager:
         # to build (notification_id null) is still accepted.
         "sent_notifications": [
             {"fields": ["sent_at"]},
+            # Covering index for the dashboard's sent/failed series: the per-day
+            # aggregate reads only sent_at and success. Non-sparse so a record
+            # with a null flag could never fall out of the index.
+            {"fields": ["sent_at", "success"], "sparse": False},
             {"fields": ["target"]},
             {"fields": ["document_id"]},
             {"fields": ["software_name"]},
@@ -124,6 +128,14 @@ class DatabaseManager:
             {"fields": ["quality_invalid"]},
             {"fields": ["created_at"]},
             {"fields": ["blacklisted", "quality_invalid", "created_at"]},
+            # Covering index for the dashboard's per-day software series
+            # (get_activity_timeseries): a created_at range scan whose aggregate
+            # reads only the two flags, so no document is fetched. The compound
+            # index above cannot serve it (created_at is its last field). Must be
+            # non-sparse: a sparse compound index drops every entry where any of
+            # its fields is null, and mentions ingested before the flags existed
+            # have null blacklisted / quality_invalid.
+            {"fields": ["created_at", "blacklisted", "quality_invalid"], "sparse": False},
             {"fields": ["software_name.normalizedForm"]},
             {"fields": ["quality_score"]},
             # Covering index for get_software_distribution: its per-name AGGREGATE
@@ -1217,41 +1229,17 @@ class DatabaseManager:
             "sent_failed": [0] * n,
         }
 
-        # Documents and software, grouped by their ingestion date (created_at).
-        # No `!= null` guard is needed: null sorts below every string in AQL, so
-        # the range condition alone excludes untimestamped rows and lets the
-        # sparse created_at index serve the scan.
-        for series_key, collection_name in (("documents", "documents"), ("software", "software")):
-            try:
-                rows = self.execute_aql_query(
-                    f"""
-                    FOR d IN {collection_name}
-                        FILTER d.created_at >= @since
-                        COLLECT day = SUBSTRING(d.created_at, 0, 10) WITH COUNT INTO c
-                        RETURN {{day: day, count: c}}
-                    """,
-                    bind_vars={"since": since},
-                    raw_results=True,
-                )
-                for row in rows:
-                    i = slot(row["day"])
-                    if i is not None:
-                        result[series_key][i] += row["count"]
-            except Exception as e:
-                logger.error(f"Failed to build {collection_name} timeseries: {e}")
-
-        # Software mentions flagged by the blacklist / Mention Quality Filter,
-        # by ingestion date — the "filter usage" histograms. Both counts come
-        # from one pass over software.
+        # Documents by ingestion date (created_at). No `!= null` guard is
+        # needed: null sorts below every string in AQL, so the range condition
+        # alone excludes untimestamped rows and lets the sparse created_at index
+        # serve the scan.
         try:
             rows = self.execute_aql_query(
                 """
-                FOR s IN software
-                    FILTER s.created_at >= @since
-                    COLLECT day = SUBSTRING(s.created_at, 0, 10)
-                        AGGREGATE blacklisted = SUM(s.blacklisted == true ? 1 : 0),
-                                  quality_invalid = SUM(s.quality_invalid == true ? 1 : 0)
-                    RETURN {day: day, blacklisted: blacklisted, quality_invalid: quality_invalid}
+                FOR d IN documents
+                    FILTER d.created_at >= @since
+                    COLLECT day = SUBSTRING(d.created_at, 0, 10) WITH COUNT INTO c
+                    RETURN {day: day, count: c}
                 """,
                 bind_vars={"since": since},
                 raw_results=True,
@@ -1259,10 +1247,42 @@ class DatabaseManager:
             for row in rows:
                 i = slot(row["day"])
                 if i is not None:
+                    result["documents"][i] += row["count"]
+        except Exception as e:
+            logger.error(f"Failed to build documents timeseries: {e}")
+
+        # Software mentions by ingestion date, with the blacklist / Mention
+        # Quality Filter "filter usage" counts, all from one pass. Reads only
+        # created_at and the two flags, so the non-sparse
+        # [created_at, blacklisted, quality_invalid] index covers it and no
+        # document is fetched (the window can span the whole collection).
+        try:
+            rows = self.execute_aql_query(
+                """
+                FOR s IN software
+                    FILTER s.created_at >= @since
+                    COLLECT day = SUBSTRING(s.created_at, 0, 10)
+                        AGGREGATE total = COUNT(1),
+                                  blacklisted = SUM(s.blacklisted == true ? 1 : 0),
+                                  quality_invalid = SUM(s.quality_invalid == true ? 1 : 0)
+                    RETURN {
+                        day: day,
+                        total: total,
+                        blacklisted: blacklisted,
+                        quality_invalid: quality_invalid
+                    }
+                """,
+                bind_vars={"since": since},
+                raw_results=True,
+            )
+            for row in rows:
+                i = slot(row["day"])
+                if i is not None:
+                    result["software"][i] += row["total"]
                     result["blacklisted"][i] += row["blacklisted"]
                     result["quality_invalid"][i] += row["quality_invalid"]
         except Exception as e:
-            logger.error(f"Failed to build filter-usage timeseries: {e}")
+            logger.error(f"Failed to build software timeseries: {e}")
 
         # Notifications received, with the accepted/rejected split, by received_at.
         try:
