@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sent Notifications</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 2rem; }
+        .filters { margin-bottom: 1.5rem; }
+        .filters .group { margin-bottom: .5rem; }
+        .filters .label { font-weight: bold; margin-right: .5rem; }
+        .filters a {
+            display: inline-block; padding: .15rem .6rem; margin: 0 .25rem .25rem 0;
+            border: 1px solid #ccc; border-radius: 1rem; text-decoration: none;
+            color: #333; font-size: .85rem;
+        }
+        .filters a.active { background: #2a6; color: #fff; border-color: #2a6; }
+        .count { color: #666; font-size: .9rem; margin-bottom: 1rem; }
+        .note { color: #555; font-size: .9rem; margin-bottom: 1rem; }
+        table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+        th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #eee; vertical-align: top; }
+        th { color: #495057; background: #f8f9fa; }
+        td.ok { color: #2e7d32; font-weight: 600; }
+        td.ko { color: #c62828; font-weight: 600; }
+        td.ts { white-space: nowrap; font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: .8rem; }
+        td.flags { white-space: nowrap; }
+        .flag { color: #bbb; }
+        .flag.on { color: #007bff; font-weight: 600; }
+        details summary { cursor: pointer; color: #007bff; }
+        pre { background: #f7f7f7; padding: .75rem; border-radius: .25rem; overflow-x: auto; max-width: 70vw; }
+        a.back { display: inline-block; margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    <a class="back" href="{{ url_for('home') }}">&larr; Dashboard</a>
+    <h1>Sent COAR Notifications</h1>
+    <p class="note">
+        Every outbound notification attempt, newest first: <strong>Offer</strong> / ReviewAction
+        to HAL and <strong>Announce</strong> / RelationshipAction to Software Heritage, one per
+        software name and document. A status of 2xx means the target inbox accepted the message;
+        the author's Accept / Reject decision arrives later as a
+        <a href="{{ url_for('coar_inbox.show_notifications') }}">received notification</a>.
+    </p>
+
+    <div class="filters">
+        <div class="group">
+            <span class="label">Target:</span>
+            <a href="{{ url_for('sent_notifications.show_sent_notifications', status=selected_status) }}"
+               class="{{ 'active' if not selected_target }}">All</a>
+            {% for t in targets %}
+                <a href="{{ url_for('sent_notifications.show_sent_notifications', target=t, status=selected_status) }}"
+                   class="{{ 'active' if selected_target == t }}">{{ t }}</a>
+            {% endfor %}
+        </div>
+        <div class="group">
+            <span class="label">Status:</span>
+            <a href="{{ url_for('sent_notifications.show_sent_notifications', target=selected_target) }}"
+               class="{{ 'active' if not selected_status }}">All</a>
+            {% for st in statuses %}
+                <a href="{{ url_for('sent_notifications.show_sent_notifications', target=selected_target, status=st) }}"
+                   class="{{ 'active' if selected_status == st }}">{{ st }}</a>
+            {% endfor %}
+        </div>
+    </div>
+
+    <p class="count">
+        Showing {{ records | length }} of {{ total }} recorded notification{{ '' if total == 1 else 's' }}
+        {% if selected_target %}to <strong>{{ selected_target }}</strong>{% endif %}
+        {% if selected_status %}that <strong>{{ selected_status }}</strong>{% endif %}
+        (most recent 200 at most).
+    </p>
+
+    {% if not records %}
+        <p><em>No sent notifications match the current filter.</em></p>
+    {% else %}
+    <table>
+        <thead>
+            <tr>
+                <th>Sent at</th>
+                <th>Target</th>
+                <th>Document</th>
+                <th>Software</th>
+                <th>Status</th>
+                <th>Mode</th>
+                <th title="created / used / shared">Context</th>
+                <th>Payload</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for record in records %}
+            {% set attrs = record.mention_context_attributes or {} %}
+            <tr>
+                <td class="ts">{{ record.sent_at }}</td>
+                <td>{{ record.target or 'N/A' }}</td>
+                <td>
+                    {% if record.document_id %}
+                        <a href="https://hal.science/{{ record.document_id }}" target="_blank" rel="noopener">{{ record.document_id }}</a>
+                        <small>(<a href="{{ url_for('api_documents.document_from_id', id=record.document_id) }}">local</a>)</small>
+                    {% else %}N/A{% endif %}
+                </td>
+                <td>{{ record.software_name or 'N/A' }}</td>
+                {% if record.success %}
+                    <td class="ok">{{ record.http_status or 'OK' }}</td>
+                {% else %}
+                    <td class="ko" title="{{ record.error or '' }}">
+                        {{ record.http_status or 'No response' }}
+                        {% if record.error %}<br><small>{{ record.error | truncate(80) }}</small>{% endif %}
+                    </td>
+                {% endif %}
+                <td>{{ record.filter_mode or 'N/A' }}</td>
+                <td class="flags">
+                    <span class="flag {{ 'on' if attrs.created }}" title="created">C</span>
+                    <span class="flag {{ 'on' if attrs.used }}" title="used">U</span>
+                    <span class="flag {{ 'on' if attrs.shared }}" title="shared">S</span>
+                </td>
+                <td>
+                    <details>
+                        <summary>{{ (record.notification_type or []) | join(', ') or 'JSON' }}</summary>
+                        <pre>{{ record.payload | tojson(indent=2) }}</pre>
+                    </details>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</body>
+</html>

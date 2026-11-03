@@ -123,6 +123,34 @@ are always excluded from outbound notifications, and — when `MENTION_QUALITY_F
 too. The order is: blacklist filter → quality filter → per-provider mode filter; each logs how many mentions it
 skips per document.
 
+## Outbound notification log
+
+Every send attempt made by the ingestion path (`POST /api/document`, unless `notify=false`) is
+recorded in the `sent_notifications` collection, whether it succeeded or not — one record per
+software name, document and provider (HAL / Software Heritage). Each record keeps:
+
+- the JSON-LD payload as sent, with its `id` URN and COAR `type` lifted to top-level fields,
+- the target and inbox URL, the HAL document id and the software name,
+- `success` (the inbox answered HTTP 2xx), `http_status` and an `error` text for failures
+  (timeout, connection error, HTTP error with the response body, or an exception),
+- the `created` / `used` / `shared` flags and the per-provider filter mode in force.
+
+`success` is **transport** success only: HAL replies 202 (accepted for processing), and the
+author's Accept/Reject decision arrives later in the inbox and is stored as a *received*
+notification. Recording never interferes with sending — a database problem is logged and the
+send keeps its real outcome.
+
+The log feeds the dashboard ("Notifications sent" card = successful sends, the
+"Notifications sent by target" table, and the sent / failed timeseries) and is browsable at
+`GET /notifications/sent` or through `GET /api/notifications/sent` (see the
+[API documentation](api.md#list-sent-notifications-json)). It only exists from the version
+that introduced it: earlier sends were never persisted and cannot be backfilled, so the counts
+start at zero on deployment.
+
+Received Accept/Reject notifications carry `inReplyTo` equal to the original Offer's `id`, so
+they can be joined to the originating record through the unique `notification_id` index;
+that join is not implemented yet.
+
 ## Receiving notifications
 
 The inbox is able to receive the accept/reject notification directly in the inbox.

@@ -2,8 +2,10 @@ import logging
 
 from flask import Blueprint, Response, jsonify, request
 
+from app.routes._args import parse_bool_arg
 from app.utils.blacklist_manager import blacklist_manager
 from app.utils.db import get_db
+from app.utils.notification_handler import is_quality_filter_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -26,23 +28,6 @@ def software_status():
         return jsonify({"error": "Failed to retrieve software status"}), 500
 
 
-def _parse_bool_arg(name: str) -> bool | None:
-    """Parse an optional tri-state boolean query param.
-
-    Returns None when the param is absent or unrecognized (so the filter is
-    skipped), True for true/1/yes/on, False for false/0/no/off.
-    """
-    raw = request.args.get(name)
-    if raw is None:
-        return None
-    v = raw.strip().lower()
-    if v in ("true", "1", "yes", "on"):
-        return True
-    if v in ("false", "0", "no", "off"):
-        return False
-    return None
-
-
 @api_software_bp.route("/api/software/latest", methods=["GET"])
 def latest_software():
     """
@@ -63,8 +48,8 @@ def latest_software():
     """
     limit = request.args.get("limit", default=10, type=int) or 10
     limit = max(1, min(limit, 100))
-    blacklisted = _parse_bool_arg("blacklisted")
-    quality_invalid = _parse_bool_arg("quality_invalid")
+    blacklisted = parse_bool_arg("blacklisted")
+    quality_invalid = parse_bool_arg("quality_invalid")
     try:
         mentions = get_db().get_latest_mentions(
             limit=limit, blacklisted=blacklisted, quality_invalid=quality_invalid
@@ -80,6 +65,45 @@ def latest_software():
     except Exception as e:
         logger.error(f"Failed to get latest software mentions: {e}")
         return jsonify({"error": "Failed to retrieve latest software mentions"}), 500
+
+
+@api_software_bp.route("/api/software/distribution", methods=["GET"])
+def software_distribution():
+    """
+    Mentions per normalized software name, most mentioned first (the global
+    software distribution), with the totals behind it.
+
+    Query params:
+      - ``limit`` (1-100, default 20): how many names to return.
+      - ``exclude_blacklisted`` (true/false, default true): leave blacklisted
+        mentions out of the counts.
+      - ``exclude_quality_invalid`` (true/false): leave quality-filtered mentions
+        out. Defaults to the Mention Quality Filter's enabled state, so the
+        default distribution matches what is actually notifiable.
+
+    Public (no API key) like ``/api/software/latest``: the dashboard renders the
+    same data. Static rule, so Werkzeug matches it ahead of
+    ``/api/software/<id_mention>``.
+    """
+    limit = request.args.get("limit", default=20, type=int) or 20
+    limit = max(1, min(limit, 100))
+    exclude_blacklisted = parse_bool_arg("exclude_blacklisted")
+    if exclude_blacklisted is None:
+        exclude_blacklisted = True
+    exclude_quality_invalid = parse_bool_arg("exclude_quality_invalid")
+    if exclude_quality_invalid is None:
+        exclude_quality_invalid = is_quality_filter_enabled()
+    try:
+        return jsonify(
+            get_db().get_software_distribution(
+                limit=limit,
+                exclude_blacklisted=exclude_blacklisted,
+                exclude_quality_invalid=exclude_quality_invalid,
+            )
+        )
+    except Exception as e:
+        logger.error(f"Failed to compute software distribution: {e}")
+        return jsonify({"error": "Failed to compute software distribution"}), 500
 
 
 @api_software_bp.route("/api/software/name/<name>", methods=["GET"])
