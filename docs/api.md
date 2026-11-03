@@ -476,6 +476,11 @@ The COAR Notify inbox handles bidirectional communication for software mention v
 - **GET `/notifications`**
     - Renders an HTML page displaying all received notifications
     - Useful for debugging and inspection during development
+    - Each row with a software name has a **Blacklist** button (or a *Blacklisted*
+      badge when the name is already listed). The button opens a confirmation
+      dialog and then calls `POST /api/blacklist` with the name shown, which is
+      the mention's normalized form. Mentions already stored are flagged only
+      after *Reapply* on the `/blacklist` page.
 
 ### List Received Notifications (JSON)
 
