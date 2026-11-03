@@ -511,7 +511,7 @@ idempotent, so it is safe across restarts and concurrent workers.
 | `software` | `created_at` | persistent | Newest-first listing (`get_latest_mentions`) and per-day histograms |
 | `software` | `blacklisted, quality_invalid, created_at` | persistent (compound) | Combined filter-then-sort listings (latest mentions narrowed by flag) |
 | `software` | `software_name.normalizedForm` | persistent | Distinct-name counts (dashboard + mention-quality), blacklist match-count, by-name lookups |
-| `software` | `software_name.normalizedForm, blacklisted, quality_invalid` | persistent (compound, non-sparse) | Covering index for the global software distribution (`get_software_distribution`): the per-name aggregate reads only indexed fields, so no document is fetched |
+| `software` | `software_name.normalizedForm, blacklisted, quality_invalid` | persistent (compound, non-sparse) | Covering index for the global software distribution (`get_software_distribution`, the `/statistics` page): the per-name aggregate reads only indexed fields, so no document is fetched |
 | `software` | `quality_score` | persistent | "Scored" counts for the Mention Quality Filter |
 
 The edge collection `edge_doc_to_software` needs no declared index: ArangoDB

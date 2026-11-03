@@ -17,6 +17,7 @@
 | GET                      | `/health`                              | No            | Service health check                     |
 | GET                      | `/status`                              | Yes           | Upload capability check                  |
 | GET                      | `/blacklist`                           | No            | Blacklist management web UI               |
+| GET                      | `/statistics`                          | No            | Statistics page: global software distribution (`?limit=`, `?exclude_blacklisted=`, `?exclude_quality_invalid=`) |
 | **Document Management**  |
 | GET                      | `/api/documents`                       | No            | Documents collection status              |
 | GET                      | `/api/documents/latest`                | No            | Latest ingested documents (newest first) |
@@ -249,7 +250,7 @@ curl -s -X POST \
 
 - **GET `/api/software/distribution`**
     - Returns the number of mentions per normalized software name, most mentioned
-      first — the global software distribution also charted on the dashboard
+      first — the global software distribution also charted on the `/statistics` page
     - Query Parameters:
         - `limit`: Number of names to return (1-100, default: 20)
         - `exclude_blacklisted`: `true`/`false` (default `true`) — leave blacklisted mentions out of the counts

@@ -138,7 +138,6 @@
       border-radius: 6px;
       border: 1px solid #eee;
     }
-    .chart-wide { position: relative; }
     .period-row {
       display: flex;
       justify-content: space-between;
@@ -285,25 +284,6 @@
     </section>
 
     <section>
-      <h2>Software distribution</h2>
-      <p class="section-note">
-        Top {{ distribution['items'] | length }} of {{ distribution.total_names }} distinct software
-        names by number of mentions ({{ distribution.total_mentions }} mentions in total).
-        Blacklisted names are excluded{% if distribution.exclude_quality_invalid %}, as are
-        quality-filtered ones{% endif %}.
-        <a href="{{ url_for('api_software.software_distribution', limit=100) }}">JSON (top 100)</a>
-      </p>
-      {% if distribution['items'] %}
-        <div class="chart-card chart-wide"
-             style="height: {{ 26 * (distribution['items'] | length) + 70 }}px">
-          <canvas id="chart-software-distribution"></canvas>
-        </div>
-      {% else %}
-        <p class="empty">No software mentions yet.</p>
-      {% endif %}
-    </section>
-
-    <section>
       <div class="period-row">
         <h2>{{ period_heading }}</h2>
         <nav class="period-selector" aria-label="Period">
@@ -339,6 +319,7 @@
         <a href="{{ url_for('coar_inbox.show_notifications') }}">View received notifications</a>
         <a href="{{ url_for('sent_notifications.show_sent_notifications') }}">View sent notifications</a>
       {% endif %}
+      <a href="{{ url_for('statistics_page') }}">Statistics</a>
       <a href="{{ url_for('blacklist_page') }}">Manage blacklist</a>
       <a href="{{ url_for('mention_quality_page') }}">Mention Quality Filter</a>
       <a href="{{ url_for('database_info') }}">Database Info</a>
@@ -356,7 +337,6 @@
           crossorigin="anonymous"></script>
   <script>
     const series = {{ timeseries | tojson }};
-    const distribution = {{ distribution | tojson }};
     const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     // Labels derived from the YYYY-MM-DD bucket axis: "Mon YYYY" for monthly
     // buckets, M/D like coar-viz otherwise (with the year once the window spans
@@ -403,36 +383,6 @@
         },
       });
     }
-
-    // Horizontal bar chart; the container sets the height (one row per bar),
-    // hence maintainAspectRatio: false.
-    function barChart(canvasId, title, barLabels, data, color) {
-      const el = document.getElementById(canvasId);
-      if (!el) return;
-      new Chart(el, {
-        type: 'bar',
-        data: {
-          labels: barLabels,
-          datasets: [{
-            label: title,
-            data,
-            backgroundColor: color + 'cc',
-            borderColor: color,
-            borderWidth: 1,
-          }],
-        },
-        options: {
-          indexAxis: 'y',
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: { legend: { display: false } },
-          scales: { x: { beginAtZero: true, ticks: { precision: 0 } } },
-        },
-      });
-    }
-
-    barChart('chart-software-distribution', 'Mentions',
-             distribution.items.map(i => i.name), distribution.items.map(i => i.count), '#fd7e14');
 
     lineChart('chart-documents', 'Documents ingested', series.documents, '#6f42c1');
     lineChart('chart-software', 'Software mentions ingested', series.software, '#fd7e14');
