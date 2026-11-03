@@ -1,5 +1,7 @@
+import datetime
 import logging
 import re
+from typing import Any
 
 from flask import Blueprint, jsonify, render_template, request
 
@@ -55,6 +57,96 @@ def _classify_origin(notification: dict) -> str:
     if "hal" in origin or "archives-ouvertes" in origin:
         return ORIGIN_HAL
     return ORIGIN_UNKNOWN
+
+
+_HAL_BASE_URL = "https://hal.science"
+
+
+def _format_received_at(value: Any) -> str:
+    """Render the stored ISO timestamp as ``YYYY-MM-DD HH:MM UTC``; fall back to the raw value."""
+    if not isinstance(value, str) or not value:
+        return "N/A"
+    try:
+        parsed = datetime.datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(datetime.UTC)
+    return parsed.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _as_dict(value: Any) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def summarize_received_notification(record: dict) -> dict[str, Any]:
+    """
+    Flatten a stored received notification into the fields shown on `/notifications`.
+
+    HAL echoes our original Offer back inside ``object`` of its Accept/Reject, so the
+    document id lives at ``object.object.id`` and the software name at
+    ``object.object["sorg:citation"].name``; the author's comment is the top-level
+    ``summary``. Software Heritage notifications use a different shape
+    (``object["as:subject"]`` / ``context.id``), so those are used as fallbacks.
+    Never raises on a malformed payload: unknown fields come back as ``None``.
+    """
+    payload = _as_dict(record.get("payload"))
+    outer = _as_dict(payload.get("object"))
+    inner = _as_dict(outer.get("object"))
+    citation = _as_dict(inner.get("sorg:citation"))
+    context = _as_dict(payload.get("context"))
+    actor = _as_dict(payload.get("actor"))
+
+    raw_types = payload.get("type")
+    if isinstance(raw_types, list):
+        types = [str(t) for t in raw_types if t]
+    elif raw_types:
+        types = [str(raw_types)]
+    else:
+        types = []
+
+    primary = types[0] if types else None
+    if primary == "Accept":
+        decision, decision_label = "accepted", "Accepted"
+    elif primary == "Reject":
+        decision, decision_label = "rejected", "Rejected"
+    else:
+        decision, decision_label = "other", ", ".join(types) or "N/A"
+
+    software = citation.get("name") or outer.get("as:subject") or None
+
+    # The document reference is either ``oai:HAL:hal-xxx`` (older Offers) or a full
+    # ``https://hal.science/hal-xxx`` URL (current Offers / SWH ``context``). Reduce
+    # both to the bare HAL id, which is also our ``documents.file_hal_id``.
+    document_ref = inner.get("id") or context.get("id") or None
+    hal_id = document_url = None
+    if isinstance(document_ref, str) and document_ref.strip():
+        document_ref = _OAI_HAL_PREFIX_RE.sub("", document_ref.strip())
+        if document_ref.startswith("http"):
+            document_url = document_ref
+            hal_id = document_ref.rstrip("/").rsplit("/", 1)[-1] or None
+        else:
+            hal_id = document_ref
+            document_url = f"{_HAL_BASE_URL}/{hal_id}"
+
+    comment = payload.get("summary")
+    if not isinstance(comment, str) or not comment.strip():
+        comment = None
+
+    return {
+        "key": record.get("_key"),
+        "origin": record.get("origin") or "N/A",
+        "received_at": _format_received_at(record.get("received_at")),
+        "types": types,
+        "decision": decision,
+        "decision_label": decision_label,
+        "software": software,
+        "hal_id": hal_id,
+        "document_url": document_url,
+        "comment": comment,
+        "actor": actor.get("id"),
+        "payload": payload,
+    }
 
 
 @coar_inbox_bp.route("/inbox", methods=["POST"])
@@ -193,14 +285,22 @@ def inbox_description():
 # KNOWN_ORIGINS because the page also lets you inspect "unknown"-tagged records.
 PAGE_ORIGINS = (ORIGIN_SWH, ORIGIN_HAL, ORIGIN_UNKNOWN)
 
+# Fixed "show" filters for the /notifications page: query value -> (label, COAR type,
+# require a comment). Kept deliberately small so the pills stay meaningful to reviewers.
+PAGE_FILTERS: dict[str, tuple[str, str | None, bool]] = {
+    "accepted": ("Accepted", "Accept", False),
+    "rejected": ("Rejected", "Reject", False),
+    "commented": ("With comment", None, True),
+}
+
 
 @coar_inbox_bp.route("/notifications", methods=["GET"])
 def show_notifications():
     """
     Display received notifications from the ArangoDB-backed store, with optional
-    server-side filtering by origin (?origin=swh|hal|unknown) and COAR type
-    (?type=Accept|Reject|...). Invalid filter values are ignored rather than
-    erroring, so a stale bookmark just shows everything.
+    server-side filtering by origin (?origin=swh|hal|unknown) and decision
+    (?show=accepted|rejected|commented). Invalid filter values are ignored rather
+    than erroring, so a stale bookmark just shows everything.
     """
     db = get_db()
 
@@ -208,21 +308,25 @@ def show_notifications():
     if origin not in PAGE_ORIGINS:
         origin = None
 
-    available_types = db.distinct_received_notification_types()
-    notification_type = request.args.get("type") or None
-    if notification_type not in available_types:
-        notification_type = None
+    show = (request.args.get("show") or "").lower() or None
+    if show not in PAGE_FILTERS:
+        show = None
+    _, notification_type, has_comment = PAGE_FILTERS.get(show or "", ("", None, False))
 
     records = db.list_received_notifications(
-        limit=200, origin=origin, notification_type=notification_type
+        limit=200,
+        origin=origin,
+        notification_type=notification_type,
+        has_comment=has_comment,
     )
+    rows = [summarize_received_notification(r) for r in records]
     return render_template(
         "notifications.html",
-        records=records,
+        rows=rows,
         origins=PAGE_ORIGINS,
-        types=available_types,
+        filters={k: v[0] for k, v in PAGE_FILTERS.items()},
         selected_origin=origin,
-        selected_type=notification_type,
+        selected_show=show,
     )
 
 

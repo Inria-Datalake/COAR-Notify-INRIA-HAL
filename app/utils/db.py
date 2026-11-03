@@ -1387,6 +1387,7 @@ class DatabaseManager:
         limit: int = 100,
         origin: str | None = None,
         notification_type: str | None = None,
+        has_comment: bool = False,
     ) -> list[dict[str, Any]]:
         """
         Return the most recent received notifications, newest first.
@@ -1395,6 +1396,8 @@ class DatabaseManager:
         (e.g. "swh" or "hal") are returned. If `notification_type` is given,
         only notifications whose COAR `type` matches are returned; the payload's
         `type` may be a single string or an array, so both shapes are handled.
+        If `has_comment` is true, only notifications carrying a non-empty
+        `summary` (the author's free-text comment) are returned.
         """
         try:
             # Ensure collection exists so the query doesn't fail on a cold DB.
@@ -1413,6 +1416,10 @@ class DatabaseManager:
                     ": n.payload.type == @ntype)"
                 )
                 bind_vars["ntype"] = notification_type
+            if has_comment:
+                filters.append(
+                    "FILTER IS_STRING(n.payload.summary) AND LENGTH(TRIM(n.payload.summary)) > 0"
+                )
             filter_clause = "\n                    ".join(filters)
             query = f"""
                 FOR n IN received_notifications
