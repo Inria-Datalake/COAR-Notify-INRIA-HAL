@@ -225,6 +225,33 @@
     </section>
 
     <section>
+      <div class="period-row">
+        <h2>{{ period_heading }}</h2>
+        <nav class="period-selector" aria-label="Period">
+          {% for value, label in period_options %}
+            <a href="{{ url_for('home', days=value) }}"
+               class="{{ 'active' if value == selected_period }}">{{ label }}</a>
+          {% endfor %}
+        </nav>
+      </div>
+      {% if timeseries.bucket == 'week' %}
+        <p class="section-note">Each point is one week, starting on the Monday shown.</p>
+      {% elif timeseries.bucket == 'month' %}
+        <p class="section-note">Each point is one calendar month.</p>
+      {% endif %}
+      <div class="chart-grid">
+        <div class="chart-card"><canvas id="chart-documents"></canvas></div>
+        <div class="chart-card"><canvas id="chart-software"></canvas></div>
+        <div class="chart-card"><canvas id="chart-blacklisted"></canvas></div>
+        <div class="chart-card"><canvas id="chart-model-invalid"></canvas></div>
+        <div class="chart-card"><canvas id="chart-total"></canvas></div>
+        <div class="chart-card"><canvas id="chart-sent"></canvas></div>
+        <div class="chart-card"><canvas id="chart-accepted"></canvas></div>
+        <div class="chart-card"><canvas id="chart-rejected"></canvas></div>
+      </div>
+    </section>
+
+    <section>
       <h2>Notifications received by origin</h2>
       <p class="section-note">
         Inbound COAR notifications delivered to our <code>/inbox</code> &mdash; the author
@@ -281,33 +308,6 @@
       {% else %}
         <p class="empty">No notifications sent yet.</p>
       {% endif %}
-    </section>
-
-    <section>
-      <div class="period-row">
-        <h2>{{ period_heading }}</h2>
-        <nav class="period-selector" aria-label="Period">
-          {% for value, label in period_options %}
-            <a href="{{ url_for('home', days=value) }}"
-               class="{{ 'active' if value == selected_period }}">{{ label }}</a>
-          {% endfor %}
-        </nav>
-      </div>
-      {% if timeseries.bucket == 'week' %}
-        <p class="section-note">Each point is one week, starting on the Monday shown.</p>
-      {% elif timeseries.bucket == 'month' %}
-        <p class="section-note">Each point is one calendar month.</p>
-      {% endif %}
-      <div class="chart-grid">
-        <div class="chart-card"><canvas id="chart-documents"></canvas></div>
-        <div class="chart-card"><canvas id="chart-software"></canvas></div>
-        <div class="chart-card"><canvas id="chart-blacklisted"></canvas></div>
-        <div class="chart-card"><canvas id="chart-model-invalid"></canvas></div>
-        <div class="chart-card"><canvas id="chart-total"></canvas></div>
-        <div class="chart-card"><canvas id="chart-sent"></canvas></div>
-        <div class="chart-card"><canvas id="chart-accepted"></canvas></div>
-        <div class="chart-card"><canvas id="chart-rejected"></canvas></div>
-      </div>
     </section>
 
     <div class="links">
