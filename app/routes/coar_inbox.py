@@ -115,15 +115,19 @@ def summarize_received_notification(record: dict) -> dict[str, Any]:
 
     software = citation.get("name") or outer.get("as:subject") or None
 
-    document_id = inner.get("id") or context.get("id") or None
-    document_url = None
-    if isinstance(document_id, str) and document_id:
-        document_id = _OAI_HAL_PREFIX_RE.sub("", document_id)
-        document_url = (
-            document_id if document_id.startswith("http") else f"{_HAL_BASE_URL}/{document_id}"
-        )
-    else:
-        document_id = None
+    # The document reference is either ``oai:HAL:hal-xxx`` (older Offers) or a full
+    # ``https://hal.science/hal-xxx`` URL (current Offers / SWH ``context``). Reduce
+    # both to the bare HAL id, which is also our ``documents.file_hal_id``.
+    document_ref = inner.get("id") or context.get("id") or None
+    hal_id = document_url = None
+    if isinstance(document_ref, str) and document_ref.strip():
+        document_ref = _OAI_HAL_PREFIX_RE.sub("", document_ref.strip())
+        if document_ref.startswith("http"):
+            document_url = document_ref
+            hal_id = document_ref.rstrip("/").rsplit("/", 1)[-1] or None
+        else:
+            hal_id = document_ref
+            document_url = f"{_HAL_BASE_URL}/{hal_id}"
 
     comment = payload.get("summary")
     if not isinstance(comment, str) or not comment.strip():
@@ -137,7 +141,7 @@ def summarize_received_notification(record: dict) -> dict[str, Any]:
         "decision": decision,
         "decision_label": decision_label,
         "software": software,
-        "document_id": document_id,
+        "hal_id": hal_id,
         "document_url": document_url,
         "comment": comment,
         "actor": actor.get("id"),
